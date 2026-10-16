@@ -1,9 +1,18 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 #include "SpawnManagerActor.h"
+#include "EscapeRoomSessionSubsystem.h"
 
 void ASpawnManagerActor::BeginPlay()
 {
     Super::BeginPlay();
+
+    // [리슨] 술래 이탈 결과 모드(GameLV?HostLeftResult)에서는 맵 생성이 없으므로 로딩 위젯도 띄우지 않음
+    // (띄우면 생성 완료 이벤트가 안 와서 엔딩 화면 위에 로딩 화면이 계속 남음)
+    if (UEscapeRoomSessionSubsystem::IsHostLeftResultWorld(GetWorld()))
+    {
+        return;
+    }
+
     ShowLoadingAndGenerate();
 }
 

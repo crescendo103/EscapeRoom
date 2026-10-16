@@ -1,4 +1,6 @@
 #include "WFCGridManager.h"
+#include "escaperoomGameMode.h"
+#include "EscapeRoomSessionSubsystem.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "WFCTileDefinition.h"
@@ -112,12 +114,21 @@ void AWFCGridManager::BeginPlay()
 		// [Match server] Launched by the lobby with -ExpectedPlayers=N: do NOT auto-generate here.
 		// AescaperoomGameMode::PostLogin calls TryGenerateMap() once every player has joined,
 		// so clients actually see the loading bar fill up. PIE/editor keeps the old auto-generate path.
-		int32 ExpectedPlayersArg = 0;
-		if (IsNetMode(NM_DedicatedServer)
-			&& FParse::Value(FCommandLine::Get(), TEXT("ExpectedPlayers="), ExpectedPlayersArg)
-			&& ExpectedPlayersArg > 0)
+		// [Listen] Host-left result mode (GameLV reopened standalone with ?HostLeftResult): the runner only
+		// watches the existing result-room ending, so never generate the map here.
+		if (UEscapeRoomSessionSubsystem::IsHostLeftResultWorld(GetWorld()))
 		{
-			UE_LOG(LogTemp, Warning, TEXT("[WFC] Dedicated match server: waiting for %d players before generating (GameMode triggers it)"), ExpectedPlayersArg);
+			UE_LOG(LogTemp, Warning, TEXT("[WFC] Host-left result mode: skipping map generation"));
+			return;
+		}
+
+		// [Listen] The chaser's PC hosts GameLV as a listen server with ?ExpectedPlayers=N in the map URL.
+		// The GameMode parses it in InitGame (runs before actor BeginPlay) and triggers TryGenerateMap()
+		// itself once everyone has joined - so skip auto-generation here while it is waiting.
+		const AescaperoomGameMode* MatchGM = GetWorld() ? GetWorld()->GetAuthGameMode<AescaperoomGameMode>() : nullptr;
+		if (MatchGM && MatchGM->IsWaitingForPlayers())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[WFC] Match host: waiting for all players before generating (GameMode triggers it)"));
 			return;
 		}
 

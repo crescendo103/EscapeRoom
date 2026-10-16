@@ -52,18 +52,8 @@ void AChaserCharacter::BeginPlay()
     // IsLocallyControlled()가 false일 수 있음 -> 잠깐 켜졌다가 NotifyControllerChanged에서 다시 꺼짐
     RefreshTerrorRadiusAudio();
 
-    // 러너와 동일한 패턴: 술래 전용 IMC를 컨트롤러의 공통(Move/Look/Jump) 컨텍스트 위에 추가
-    if (APlayerController* PC = Cast<APlayerController>(GetController()))
-    {
-        if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
-            ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
-        {
-            if (ChaserMappingContext)
-            {
-                Subsystem->AddMappingContext(ChaserMappingContext, 1);
-            }
-        }
-    }
+    // [리슨] 술래 전용 IMC 추가는 AddLocalInputMappings(NotifyControllerChanged 경유)로 이동.
+    // 리슨 호스트에서는 이 시점에 아직 빙의 전이라 GetController()가 null -> 키가 하나도 안 먹었음
 
     // 부감 스킬용 천장 컬링: 맵 생성 매니저를 찾아서 생성 완료 델리게이트에 바인딩해둔다.
     // OnMapGenComplete는 OnRep_GenComplete()를 통해 서버/모든 클라이언트에서 각자 정확히 한 번씩 호출된다
@@ -1108,8 +1098,19 @@ void AChaserCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
 
 void AChaserCharacter::NotifyControllerChanged()
 {
-    Super::NotifyControllerChanged();
+    Super::NotifyControllerChanged(); // 부모에서 로컬 플레이어면 AddLocalInputMappings 호출
     RefreshTerrorRadiusAudio();
+}
+
+void AChaserCharacter::AddLocalInputMappings(UEnhancedInputLocalPlayerSubsystem* Subsystem)
+{
+    Super::AddLocalInputMappings(Subsystem); // 공통 IMC (우선순위 0)
+
+    // 술래 전용 IMC를 공통(Move/Look/Jump) 컨텍스트 위에 추가
+    if (ChaserMappingContext)
+    {
+        Subsystem->AddMappingContext(ChaserMappingContext, 1);
+    }
 }
 
 float AChaserCharacter::GetTerrorRadius() const

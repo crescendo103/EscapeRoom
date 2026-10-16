@@ -42,6 +42,14 @@ void ADungeonPlayerController::BeginPlay()
 		return;
 	}
 
+	// [리슨] 술래가 매치 도중 나가서 GameLV를 혼자 모드 결과 모드(?HostLeftResult)로 다시 연 경우:
+	// 맵 생성/로딩 위젯 없이 바로 러너 승리 엔딩 (WFCGridManager도 이 모드에선 생성을 안 함)
+	if (UEscapeRoomSessionSubsystem::IsHostLeftResultWorld(GetWorld()))
+	{
+		ShowHostLeftResult();
+		return;
+	}
+
 	// 바로 찾기를 시도하고, 실패하면 찾을 때까지 타이머 재시도
 	InitializeMapGeneratorBinding();
 }
@@ -464,6 +472,15 @@ UEscapeFadeWidget* ADungeonPlayerController::EnsureEscapeFadeWidget()
 
 void ADungeonPlayerController::ClientShowMatchEnd_Implementation(int32 EscapedCount, int32 CaughtCount, int32 TotalRunners, bool bIsChaser, bool bWon)
 {
+	// [리슨] 엔딩을 받았음 -> 이후 술래(호스트)가 먼저 나가서 끊겨도 "술래 이탈 러너 승리"가 아니라 조용히 로비로
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		if (UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
+		{
+			Session->MarkMatchResultReceived();
+		}
+	}
+
 	// 관전 전환(Space) 중지 + 이동/시점 입력 차단 (화면은 곧 완전히 검어짐)
 	bLocalSpectateInputEnabled = false;
 	SetIgnoreMoveInput(true);
@@ -494,6 +511,15 @@ void ADungeonPlayerController::ClientShowMatchEnd_Implementation(int32 EscapedCo
 		UE_LOG(LogTemp, Warning, TEXT("[MatchEnd][Debug] bDebugForceRunnerWinResult ON -> RoomType=%d"), (int32)RoomType);
 	}
 
+	ShowLocalMatchEnd(Result, RoomType);
+}
+
+void ADungeonPlayerController::ShowLocalMatchEnd(const FText& ResultMessage, EMatchResultRoomType RoomType)
+{
+	// 정상 엔딩(ClientShowMatchEnd)과 술래 이탈 결과 모드(ShowHostLeftResult)가 같이 쓰는 엔딩 연출:
+	// 결과 방 선택 -> EscapeFadeWidget 암전 -> 완전히 검어지면 HandleMatchEndBlack에서 결과 방으로 시점 전환
+	const FText& Result = ResultMessage;
+
 	AResultRoomActor* Room = AResultRoomActor::FindRoom(this, RoomType);
 	ActiveResultRoom = Room;
 	if (!Room)
@@ -514,6 +540,25 @@ void ADungeonPlayerController::ClientShowMatchEnd_Implementation(int32 EscapedCo
 	{
 		UE_LOG(LogTemp, Error, TEXT("[MatchEnd] EscapeFadeWidgetClass가 비어있어 게임 종료 화면을 띄울 수 없음"));
 	}
+}
+
+void ADungeonPlayerController::ShowHostLeftResult()
+{
+	// 매치 중에 저장해둔 내 캐릭터 외형 (이 컨트롤러는 새로 만들어진 거라 CachedResultMesh가 비어있음)
+	if (const UGameInstance* GI = GetGameInstance())
+	{
+		if (const UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
+		{
+			CachedResultMesh = Session->GetResultMesh();
+			CachedResultMaterials = Session->GetResultMaterials();
+		}
+	}
+
+	SetIgnoreMoveInput(true);
+	SetIgnoreLookInput(true);
+
+	UE_LOG(LogTemp, Log, TEXT("[MatchEnd] Host-left result mode: showing RunnerWin (mesh=%s)"), *GetNameSafe(CachedResultMesh));
+	ShowLocalMatchEnd(HostLeftResultMessage, EMatchResultRoomType::RunnerWin);
 }
 
 void ADungeonPlayerController::HandleMatchEndBlack()
@@ -570,6 +615,15 @@ void ADungeonPlayerController::CacheResultCharacter(APawn* P)
 	}
 	UE_LOG(LogTemp, Log, TEXT("[MatchEnd] Cached result character: %s (%d materials)"),
 		*GetNameSafe(CachedResultMesh), CachedResultMaterials.Num());
+
+	// [리슨] 술래 이탈로 튕기면 이 컨트롤러가 사라지므로 GameInstance 쪽에도 저장 (결과 모드에서 꺼내 씀)
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		if (UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
+		{
+			Session->SetResultCharacter(CachedResultMesh, CachedResultMaterials);
+		}
+	}
 }
 
 void ADungeonPlayerController::StopSpectating()
@@ -593,21 +647,24 @@ void ADungeonPlayerController::ReturnToLobby()
 	{
 		LobbyAddress = UEscapeRoomSessionSubsystem::GetConfiguredLobbyAddress(); // [AWS] 설정 파일의 로비 주소
 	}
-	if (const UGameInstance* GI = GetGameInstance())
+	if (UGameInstance* GI = GetGameInstance())
 	{
-		if (const UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
+		if (UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
 		{
 			if (Session->HasLobbyAddress())
 			{
 				LobbyAddress = Session->GetLobbyAddress();
 			}
+			// 스스로 나가는 것이므로 이후 연결 끊김은 "술래 이탈"로 보지 않음
+			Session->EndMatch();
 		}
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("[Lobby] Returning to lobby: %s"), *LobbyAddress);
 
 	// 로비 맵의 StartScreenController가 BeginPlay에서 시작 화면을 띄우므로 UI 정리는 따로 안 해도 됨.
-	// 매치 서버에서는 이 접속이 끊겨 Logout 처리되고, 마지막 사람까지 나가면 서버 프로세스가 종료됨
+	// [리슨] 러너: 술래 PC에서 Logout 처리됨.
+	//        술래(호스트): 내가 나가면 리슨서버가 닫혀서 아직 엔딩을 보던 러너도 로비로 돌아감 (엔딩을 이미 받았으니 조용히 복귀)
 	RestoreLocallyHiddenSpectateMesh();
 	ClientTravel(LobbyAddress, TRAVEL_Absolute);
 }

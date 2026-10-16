@@ -35,18 +35,17 @@ void ARunnerCharacter::BeginPlay()
     // 서버-클라 속도가 어긋나지 않도록)
     SetSprintingLocal(false);
 
-    // 어떤 PlayerController가 빙의했든 상관없이 동작하도록 APlayerController로 캐스팅
-    if (APlayerController* PC = Cast<APlayerController>(GetController()))
+    // [리슨] 러너 전용 IMC 추가는 AddLocalInputMappings(NotifyControllerChanged 경유)로 이동
+}
+
+void ARunnerCharacter::AddLocalInputMappings(UEnhancedInputLocalPlayerSubsystem* Subsystem)
+{
+    Super::AddLocalInputMappings(Subsystem); // 공통 IMC (우선순위 0)
+
+    if (RunnerMappingContext)
     {
-        if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
-            ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
-        {
-            if (RunnerMappingContext)
-            {
-                // 우선순위 1 : 컨트롤러가 추가하는 공통(Move/Look/Jump) 컨텍스트 위에 추가로 쌓음
-                Subsystem->AddMappingContext(RunnerMappingContext, 1);
-            }
-        }
+        // 우선순위 1 : 공통(Move/Look/Jump) 컨텍스트 위에 추가로 쌓음
+        Subsystem->AddMappingContext(RunnerMappingContext, 1);
     }
 }
 

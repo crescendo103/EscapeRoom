@@ -168,6 +168,9 @@ protected:
 
     virtual void PawnClientRestart() override;
 
+    // [리슨] 공통 IMC(부모) + 러너 전용 IMC 추가 (BeginPlay에서 옮겨옴 - 술래와 같은 이유)
+    virtual void AddLocalInputMappings(UEnhancedInputLocalPlayerSubsystem* Subsystem) override;
+
     // 상호작용키를 뗀 순간: 홀드 타이머가 아직 진행 중이었다면 취소
     void CancelHoldInteract(const FInputActionValue& Value);
 

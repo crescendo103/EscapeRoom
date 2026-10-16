@@ -13,6 +13,7 @@ class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
 class UAudioComponent;
+class UEnhancedInputLocalPlayerSubsystem;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -43,6 +44,21 @@ public:
 
 protected:
 	virtual void BeginPlay();
+
+	// ---- 입력 매핑 (리슨서버 대응) ----
+	// [리슨] 예전엔 BeginPlay에서 GetController()로 IMC를 추가했는데, 리슨서버 호스트(술래)는
+	// 서버에서 스폰 -> BeginPlay(이때 컨트롤러 없음) -> 빙의 순서라 IMC가 안 들어가서 키가 전혀 안 먹었음.
+	// 빙의가 확정되는 NotifyControllerChanged(서버 PossessedBy + 클라 OnRep_Controller 양쪽에서 호출)에서 추가함
+	virtual void NotifyControllerChanged() override;
+
+	// 로컬 플레이어에게 이 캐릭터용 IMC들을 추가. 자식(술래/러너)은 Super 호출 후 자기 IMC를 추가로 쌓음
+	virtual void AddLocalInputMappings(UEnhancedInputLocalPlayerSubsystem* Subsystem);
+
+	// 공통(이동/시점/점프) Input Mapping Context - 우선순위 0으로 추가.
+	// 기본값은 FirstPerson 템플릿의 IMC_Default. 경로가 다르면 캐릭터 BP 디테일에서 지정할 것
+	UPROPERTY(EditDefaultsOnly, Category = "Input")
+	TSoftObjectPtr<UInputMappingContext> CommonMappingContext =
+		TSoftObjectPtr<UInputMappingContext>(FSoftObjectPath(TEXT("/Game/FirstPerson/Input/IMC_Default.IMC_Default")));
 
 public:
 	virtual void Tick(float DeltaSeconds) override;

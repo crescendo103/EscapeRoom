@@ -60,9 +60,20 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_SetReady(bool bReady);
 
-	// Called by the lobby server to redirect this client to a per-room match server
+	// [리슨] 로비 서버 -> 러너들: 술래 PC(리슨서버)로 접속해라
 	UFUNCTION(Client, Reliable)
 	void Client_ConnectToMatch(const FString& ServerAddress);
+
+	// [리슨] 로비 서버 -> 랜덤으로 뽑힌 술래: 내 PC에서 GameLV를 리슨서버로 열어라.
+	// Port: 리슨 포트 (같은 PC에서 로비+매치를 같이 테스트할 때 안 겹치게 로비가 정해줌)
+	// ExpectedPlayers: 술래 포함 방 인원 - 다 모이면 맵 생성 시작 (AescaperoomGameMode::CheckAllPlayersJoined)
+	UFUNCTION(Client, Reliable)
+	void Client_HostMatch(int32 Port, int32 ExpectedPlayers);
+
+	// 매치 레벨 이름 (OpenLevel에 그대로 넘김).
+	// 술래 이탈 시 러너 승리 연출도 이 맵을 혼자 모드(?HostLeftResult)로 다시 열어서 기존 결과 방/엔딩 UI를 씀
+	UPROPERTY(EditDefaultsOnly, Category = "Match")
+	FName MatchLevelName = TEXT("GameLV");
 
 	// 방 인원 전원이 Ready가 되는 순간(카운트다운 시작) 로비 서버가 방 멤버 전원에게 호출.
 	// 로비 서버에서 재생하면 플레이어에게 안 들리므로 각 클라이언트가 자기 화면에서 2D로 재생
@@ -87,6 +98,18 @@ public:
 private:
 	UPROPERTY()
 	TObjectPtr<UAudioComponent> LobbyBGMComponent;
+
+	// 매치로 떠나기 직전에 지금 접속해 있는 로비 주소를 서브시스템에 저장 (러너/술래 공통)
+	void RememberCurrentLobbyAddress();
+
+	// 로비 이름에서 URL을 깨뜨리는 문자를 치환한 내 이름 (?PName= 용)
+	FString GetUrlSafePlayerName() const;
+
+	// 매치 접속이 끊겨 시작 맵으로 돌아왔을 때 처리. 처리했으면 true (이후 BeginPlay 기본 흐름 생략)
+	bool HandleMatchDisconnectResult();
+
+	// 저장된 로비 주소로 재접속
+	void TravelBackToLobby();
 
 	void StartLobbyBGM();
 

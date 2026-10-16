@@ -8,6 +8,8 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "InputMappingContext.h"
+#include "GameFramework/PlayerController.h"
 #include "InputActionValue.h"
 #include "Engine/LocalPlayer.h"
 #include "DungeonPlayerController.h"
@@ -89,6 +91,37 @@ void AescaperoomCharacter::UpdateBreathAudio(float DeltaSeconds)
 }
 
 //////////////////////////////////////////////////////////////////////////// Input
+
+void AescaperoomCharacter::NotifyControllerChanged()
+{
+	Super::NotifyControllerChanged();
+
+	// 이 머신에서 직접 조종하는 캐릭터일 때만 (리슨 호스트 본인 / 클라 본인)
+	APlayerController* PC = Cast<APlayerController>(Controller);
+	if (!PC || !PC->IsLocalController())
+	{
+		return;
+	}
+
+	if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
+	{
+		AddLocalInputMappings(Subsystem);
+	}
+}
+
+void AescaperoomCharacter::AddLocalInputMappings(UEnhancedInputLocalPlayerSubsystem* Subsystem)
+{
+	// 같은 IMC를 다시 추가해도 중복되지 않음 (BP에서 이미 추가했어도 안전)
+	if (UInputMappingContext* Common = CommonMappingContext.LoadSynchronous())
+	{
+		Subsystem->AddMappingContext(Common, 0);
+	}
+	else
+	{
+		UE_LOG(LogTemplateCharacter, Warning, TEXT("[Input] %s: CommonMappingContext를 불러오지 못함 (%s) - 캐릭터 BP에서 IMC_Default 지정 필요"),
+			*GetNameSafe(this), *CommonMappingContext.ToString());
+	}
+}
 
 void AescaperoomCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {	

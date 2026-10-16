@@ -6,6 +6,8 @@
 #include "TimerManager.h"
 #include "Misc/Parse.h"
 #include "Misc/CommandLine.h"
+#include "Engine/NetConnection.h"
+#include "GameFramework/PlayerController.h"
 
 ALobbyGameMode::ALobbyGameMode()
 {
@@ -139,92 +141,110 @@ void ALobbyGameMode::CancelRoomCountdown(int32 RoomId)
 	}
 }
 
-int32 ALobbyGameMode::AcquireFreeMatchPort()
+void ALobbyGameMode::Logout(AController* Exiting)
 {
-	for (int32 i = 0; i < MaxMatchServers; ++i)
+	// 로비를 떠나면(술래가 리슨서버를 열러 감 / 러너가 술래 PC로 감 / 게임 종료) 방 멤버에서 빼둠.
+	// 매치가 시작된 방은 LeaveRoom -> CheckRoomReadyState가 bMatchStarted로 바로 리턴하므로 재시작 안 됨.
+	// 마지막 멤버까지 나가면 방이 삭제되어 목록에 유령 방이 남지 않음
+	if (Exiting)
 	{
-		const int32 Port = BasePort + i;
-		FProcHandle* Existing = PortProcesses.Find(Port);
-		if (!Existing)
-		{
-			return Port;
-		}
-
-		// 이 포트를 쓰던 매치 서버가 이미 끝났으면(전원 나가서 스스로 종료) 핸들 정리 후 재사용
-		if (!FPlatformProcess::IsProcRunning(*Existing))
-		{
-			FPlatformProcess::CloseProc(*Existing);
-			PortProcesses.Remove(Port);
-			return Port;
-		}
+		LeaveRoom(Exiting->PlayerState);
 	}
-	return -1;
+	Super::Logout(Exiting);
 }
 
-FString ALobbyGameMode::GetPublicAddressForClients() const
+FString ALobbyGameMode::GetRemoteIPOf(APlayerController* PC)
 {
-	FString PublicIP;
-	if (FParse::Value(FCommandLine::Get(), TEXT("PublicIP="), PublicIP) && !PublicIP.IsEmpty())
+	UNetConnection* Conn = PC ? PC->GetNetConnection() : nullptr;
+	if (!Conn)
 	{
-		return PublicIP;
+		return FString();
 	}
+	// false = 포트 없이 IP만. 술래 PC가 열 리슨 포트는 로비가 따로 정해서 붙임
+	FString IP = Conn->LowLevelGetRemoteAddress(false);
 
-	// 인자를 빼먹으면 클라가 매치 서버에 못 들어가므로 크게 경고 (같은 PC에서 돌릴 때만 동작하는 127.0.0.1로 대체)
-	UE_LOG(LogTemp, Error, TEXT("[Lobby] -PublicIP= 실행 인자가 없음! 127.0.0.1로 대체 - 다른 PC의 클라는 매치 서버에 접속 못 함. ")
-		TEXT("로비를 'escaperoomServer.exe LovyLv -port=7777 -PublicIP=<EC2 탄력적 IP> -log' 형태로 실행할 것"));
-	return TEXT("127.0.0.1");
+	// 로비와 같은 PC에서 접속한 클라는 IPv6 루프백/매핑 주소로 보일 수 있어서 IPv4로 정리
+	if (IP == TEXT("::1"))
+	{
+		IP = TEXT("127.0.0.1");
+	}
+	IP.RemoveFromStart(TEXT("::ffff:"));
+	return IP;
 }
 
-int32 ALobbyGameMode::LaunchMatchServerProcess(int32 RoomId)
-{
-	// [로컬 테스트 시절 - AWS 전환으로 주석처리] 포트를 계속 늘리기만 했음
-	// const int32 Port = NextPort++;
-	const int32 Port = AcquireFreeMatchPort();
-	if (Port < 0)
-	{
-		UE_LOG(LogTemp, Error, TEXT("[Lobby] Room %d: 남은 매치 서버 포트 없음 (최대 %d개 동시 진행)"), RoomId, MaxMatchServers);
-		return -1;
-	}
-
-	// 로비 서버와 같은 exe(escaperoomServer)로 매치 맵을 띄움
-	const FString ExePath = FPlatformProcess::ExecutablePath();
-	// 방 인원수를 같이 넘겨서, 매치 서버가 이 인원이 다 접속한 뒤에 맵 생성을 시작하게 함
-	// (로딩바가 클라 화면에서 실제로 차오르는 연출용 - AescaperoomGameMode::PostLogin 참고)
-	int32 ExpectedPlayers = 0;
-	if (auto* LobbyGS = GetGameState<AEscapeRoomGameState>())
-	{
-		if (const FRoomInfo* Room = LobbyGS->FindRoom(RoomId))
-		{
-			ExpectedPlayers = Room->Members.Num();
-		}
-	}
-	const FString Args = FString::Printf(TEXT("GameLV -server -port=%d -ExpectedPlayers=%d -log"), Port, ExpectedPlayers);
-
-	FProcHandle Handle = FPlatformProcess::CreateProc(
-		*ExePath, *Args,
-		true, false, false,
-		nullptr, 0, nullptr, nullptr);
-
-	if (!Handle.IsValid())
-	{
-		UE_LOG(LogTemp, Error, TEXT("[Lobby] Room %d: 매치 서버 프로세스 실행 실패 (%s %s)"), RoomId, *ExePath, *Args);
-		return -1;
-	}
-
-	// [로컬 테스트 시절] RoomServerProcesses.Add(RoomId, Handle);
-	PortProcesses.Add(Port, Handle);
-	UE_LOG(LogTemp, Log, TEXT("[Lobby] Room %d: match server process started on port %d"), RoomId, Port);
-	return Port;
-}
-
-void ALobbyGameMode::RedirectRoomMembersToMatchServer(int32 RoomId)
+bool ALobbyGameMode::StartListenMatch(int32 RoomId)
 {
 	auto* GS = GetGameState<AEscapeRoomGameState>();
 	FRoomInfo* Room = GS ? GS->FindRoom(RoomId) : nullptr;
-	if (!Room) return;
+	if (!Room)
+	{
+		return false;
+	}
+
+	// ---- 1) 술래 랜덤 선택 (유효한 멤버 중에서) ----
+	TArray<AStartScreenController*> Candidates;
+	for (const TObjectPtr<APlayerState>& Member : Room->Members)
+	{
+		if (auto* PC = Cast<AStartScreenController>(Member ? Member->GetPlayerController() : nullptr))
+		{
+			Candidates.Add(PC);
+		}
+	}
+	if (Candidates.Num() == 0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[Lobby] Room %d: 술래 후보가 없음"), RoomId);
+		return false;
+	}
+
+	AStartScreenController* ChaserPC = Candidates[FMath::RandRange(0, Candidates.Num() - 1)];
+
+	// ---- 2) 러너들이 접속할 술래 주소 (술래가 로비를 떠나기 전에 미리 확보) ----
+	const FString ChaserIP = GetRemoteIPOf(ChaserPC);
+	if (ChaserIP.IsEmpty())
+	{
+		// 로비 서버 본인(리슨 로비/PIE 호스트)이 뽑히면 NetConnection이 없음 - 로비는 데디로 돌릴 것
+		UE_LOG(LogTemp, Error, TEXT("[Lobby] Room %d: 술래(%s)의 접속 IP를 알 수 없음 - 로비를 데디서버로 실행했는지 확인"),
+			RoomId, *GetNameSafe(ChaserPC->PlayerState));
+		return false;
+	}
+
+	const int32 Port = BasePort + NextMatchPortOffset;
+	NextMatchPortOffset = (NextMatchPortOffset + 1) % MaxMatchPorts;
+
+	const int32 ExpectedPlayers = Room->Members.Num(); // 술래 포함
+	Room->MatchServerAddress = FString::Printf(TEXT("%s:%d"), *ChaserIP, Port);
+
+	UE_LOG(LogTemp, Log, TEXT("[Lobby] Room %d: chaser = %s -> hosting at %s (expected %d players)"),
+		RoomId, *GetNameSafe(ChaserPC->PlayerState), *Room->MatchServerAddress, ExpectedPlayers);
+
+	// ---- 3) 술래에게 리슨서버 열라고 지시 (술래는 이 직후 로비를 떠나 Logout -> 방에서 빠짐) ----
+	TWeakObjectPtr<APlayerState> ChaserPS = ChaserPC->PlayerState;
+	ChaserPC->Client_HostMatch(Port, ExpectedPlayers);
+
+	// ---- 4) 술래 PC가 맵을 로드하고 리슨을 열 시간을 준 뒤 러너들을 보냄 ----
+	FTimerHandle DelayHandle;
+	GetWorldTimerManager().SetTimer(DelayHandle, [this, RoomId, ChaserPS]()
+	{
+		RedirectRoomMembersToMatchServer(RoomId, ChaserPS);
+	}, MatchHostBootDelaySeconds, false);
+
+	return true;
+}
+
+void ALobbyGameMode::RedirectRoomMembersToMatchServer(int32 RoomId, TWeakObjectPtr<APlayerState> ChaserPS)
+{
+	auto* GS = GetGameState<AEscapeRoomGameState>();
+	FRoomInfo* Room = GS ? GS->FindRoom(RoomId) : nullptr;
+	if (!Room) return; // 기다리는 사이 전원이 나가서 방이 사라짐
 
 	for (TObjectPtr<APlayerState> Member : Room->Members)
 	{
+		// 술래는 이미 떠났지만(Logout으로 멤버에서 빠짐) 혹시 남아있어도 다시 보내지 않음.
+		// 나간 플레이어의 PlayerState는 null일 수 있어서 반드시 확인
+		if (!Member || Member == ChaserPS.Get())
+		{
+			continue;
+		}
 		if (auto* PC = Cast<AStartScreenController>(Member->GetPlayerController()))
 		{
 			PC->Client_ConnectToMatch(Room->MatchServerAddress);
@@ -241,10 +261,10 @@ void ALobbyGameMode::OnRoomCountdownFinished(int32 RoomId)
 	Room->bCountdownActive = false;
 	Room->bMatchStarted = true;
 
-	const int32 Port = LaunchMatchServerProcess(RoomId);
-	if (Port < 0)
+	// [리슨] 데디 매치 서버 프로세스를 띄우던 자리 -> 랜덤 술래에게 리슨서버 호스팅을 맡김
+	if (!StartListenMatch(RoomId))
 	{
-		// 매치 서버를 못 띄움 -> 방을 대기 상태로 되돌리고 Ready를 풀어서, 다시 Ready하면 재시도되게 함
+		// 시작 실패 -> 방을 대기 상태로 되돌리고 Ready를 풀어서, 다시 Ready하면 재시도되게 함
 		Room->bMatchStarted = false;
 		for (TObjectPtr<APlayerState> Member : Room->Members)
 		{
@@ -253,27 +273,5 @@ void ALobbyGameMode::OnRoomCountdownFinished(int32 RoomId)
 				EP->bIsReady = false;
 			}
 		}
-		return;
 	}
-
-	// ===== [로컬 테스트 전용 - AWS 전환으로 주석처리] =====
-	// 127.0.0.1은 "접속하는 사람 자신의 PC"라는 뜻이라, 클라이언트/로비/매치 서버가
-	// 전부 같은 PC일 때만 동작함.
-	// [AWS] EC2로 옮길 때 반드시 수정: 매치 서버는 로비와 같은 EC2에서 실행되므로 여기를 EC2 공인 IP로
-	//       바꿔야 클라이언트가 접속할 수 있음. 방법 예시:
-	//       1) 로비 실행 인자로 받기 - 로비를 "-PublicIP=3.35.x.x"로 실행하고
-	//          FParse::Value(FCommandLine::Get(), TEXT("PublicIP="), PublicIP)로 읽어서 사용 (탄력적 IP면 이걸로 충분)
-	//       2) EC2 메타데이터(http://169.254.169.254/latest/meta-data/public-ipv4)로 자동 조회
-	//       + EC2 보안 그룹에서 로비 포트(7777)와 매치 서버 포트 범위(BasePort~)를 UDP로 열어둘 것
-	// Room->MatchServerAddress = FString::Printf(TEXT("127.0.0.1:%d"), Port);
-
-	// ===== [AWS] 로비 실행 인자 -PublicIP= 로 받은 EC2 공인 IP를 클라에게 알려줌 =====
-	Room->MatchServerAddress = FString::Printf(TEXT("%s:%d"), *GetPublicAddressForClients(), Port);
-	UE_LOG(LogTemp, Log, TEXT("[Lobby] Room %d: countdown finished, match server launching on %s"), RoomId, *Room->MatchServerAddress);
-
-	FTimerHandle DelayHandle;
-	GetWorldTimerManager().SetTimer(DelayHandle, [this, RoomId]()
-	{
-		RedirectRoomMembersToMatchServer(RoomId);
-	}, MatchServerBootDelaySeconds, false); // [로컬 테스트 시절] 3.0f
 }

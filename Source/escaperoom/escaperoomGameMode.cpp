@@ -116,8 +116,13 @@ UClass* AescaperoomGameMode::GetDefaultPawnClassForController_Implementation(ACo
 		JoinIndex = GameState->PlayerArray.IndexOfByKey(InController->PlayerState);
 	}
 
-	const bool bIsChaser = (JoinIndex == ChaserPlayerIndex);
-	UE_LOG(LogTemp, Log, TEXT("[Roles][Debug] %s JoinIndex=%d -> %s"),
+	// [리슨] 실제 매치: 리슨서버 호스트 본인(= 로비에서 랜덤으로 뽑힌 술래) = 술래.
+	// 리슨서버에서 로컬 컨트롤러는 호스트 1명뿐이고, 호스트는 맵 로드 때 가장 먼저 로그인하므로 JoinIndex도 항상 0.
+	// [디버그] PIE 등 다른 넷모드에서는 예전처럼 ChaserPlayerIndex번째 접속자 = 술래
+	const bool bListenMatch = IsNetMode(NM_ListenServer);
+	const int32 ChaserJoinIndex = bListenMatch ? 0 : ChaserPlayerIndex;
+	const bool bIsChaser = bListenMatch ? InController->IsLocalController() : (JoinIndex == ChaserPlayerIndex);
+	UE_LOG(LogTemp, Log, TEXT("[Roles]%s %s JoinIndex=%d -> %s"), bListenMatch ? TEXT("[Listen]") : TEXT("[Debug]"),
 		*GetNameSafe(InController), JoinIndex, bIsChaser ? TEXT("Chaser") : TEXT("Runner"));
 
 	// 역할을 PlayerState에도 기록 -> 모든 클라에 복제되어 MatchWidget 플레이어 목록에서 술래를 제외할 수 있음
@@ -146,7 +151,7 @@ UClass* AescaperoomGameMode::GetDefaultPawnClassForController_Implementation(ACo
 		else
 		{
 			// 내 앞에 접속한 사람 중 술래를 뺀 수 = 몇 번째 러너인지
-			const int32 RunnerOrder = FMath::Max(JoinIndex - ((ChaserPlayerIndex < JoinIndex) ? 1 : 0), 0);
+			const int32 RunnerOrder = FMath::Max(JoinIndex - ((ChaserJoinIndex < JoinIndex) ? 1 : 0), 0);
 			VariantIndex = RunnerOrder % RunnerPawnClasses.Num();
 			if (MPS)
 			{
@@ -195,11 +200,26 @@ void AescaperoomGameMode::InitGameState()
 		GS->OnMatchClockStarted.AddUObject(this, &AescaperoomGameMode::HandleMatchClockStarted);
 	}
 
-	// 로비가 넘겨준 예상 인원 (데디 매치 서버에서만 의미 있음)
-	if (IsNetMode(NM_DedicatedServer))
+	// [리슨] 예상 인원은 InitGame에서 읽음 (여기선 OptionsString이 아직 비어있음)
+}
+
+void AescaperoomGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
+{
+	Super::InitGame(MapName, Options, ErrorMessage);
+
+	// [리슨] 술래 PC: OpenLevel("GameLV", "listen?ExpectedPlayers=N?PName=...")
+	ExpectedPlayers = UGameplayStatics::GetIntOption(Options, TEXT("ExpectedPlayers"), 0);
+
+	// [데디 시절 호환] 매치 서버를 실행 인자 -ExpectedPlayers=N 로 띄운 경우
+	if (ExpectedPlayers <= 0 && IsNetMode(NM_DedicatedServer))
 	{
 		FParse::Value(FCommandLine::Get(), TEXT("ExpectedPlayers="), ExpectedPlayers);
-		UE_LOG(LogTemp, Log, TEXT("[MatchStart] ExpectedPlayers=%d (0 = no waiting)"), ExpectedPlayers);
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[MatchStart] NetMode=%d ExpectedPlayers=%d (0 = no waiting)"), (int32)GetNetMode(), ExpectedPlayers);
+	if (IsNetMode(NM_ListenServer) && GetWorld())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[Match] Listen server up on port %d (host = chaser)"), GetWorld()->URL.Port);
 	}
 }
 
@@ -336,6 +356,13 @@ void AescaperoomGameMode::Logout(AController* Exiting)
 	PendingStartPlayers.Remove(TWeakObjectPtr<AController>(Exiting));
 
 	Super::Logout(Exiting);
+
+	// [리슨] 술래 PC(리슨서버)에서 러너가 나간 경우 - 호스트는 남아있으니 아무것도 안 함.
+	// 매치 도중 나간 러너 처리는 기존 게임 로직 그대로
+	if (!IsNetMode(NM_DedicatedServer))
+	{
+		return;
+	}
 
 	FTimerHandle CheckEmptyHandle;
 	GetWorldTimerManager().SetTimer(CheckEmptyHandle, [this]()

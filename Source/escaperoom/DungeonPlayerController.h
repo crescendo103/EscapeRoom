@@ -19,6 +19,7 @@ class AChaserCharacter;
 class UAudioComponent;
 class USoundBase;
 struct FInputActionValue;
+enum class EMatchResultRoomType : uint8;
 
 UCLASS()
 class ADungeonPlayerController : public APlayerController
@@ -114,6 +115,10 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Escape|UI")
 	FText MatchResultFormat = NSLOCTEXT("MatchEnd", "Result", "Escaped {0}  :  Caught {1}  :  Total {2}");
+
+	// [리슨] 술래(호스트)가 매치 도중 나갔을 때 결과 문구 (결과 방 제목은 RunnerWin 방의 ResultTitle 그대로)
+	UPROPERTY(EditDefaultsOnly, Category = "Escape|UI")
+	FText HostLeftResultMessage = NSLOCTEXT("MatchEnd", "HostLeft", "The chaser left the game");
 
 	// 본인 클라 -> 서버: 다음 관전 대상으로 전환 (탈출한 플레이어만 허용)
 	UFUNCTION(Server, Reliable)
@@ -239,6 +244,12 @@ private:
 
 	// EscapeFadeWidget이 게임 종료 암전을 끝낸 순간 - 메시 교체 + 결과 방 카메라로 전환
 	void HandleMatchEndBlack();
+
+	// 엔딩 연출 공통부: 결과 방 선택 + EscapeFadeWidget 게임 종료 화면 (정상 엔딩 / 술래 이탈 결과 모드 공용)
+	void ShowLocalMatchEnd(const FText& ResultMessage, EMatchResultRoomType RoomType);
+
+	// [리슨] 술래 이탈 결과 모드(GameLV?HostLeftResult, 혼자 모드): 저장해둔 내 외형으로 러너 승리 엔딩
+	void ShowHostLeftResult();
 	void OnSpectateNextInput(const FInputActionValue& Value);
 	void UpdateLocalSpectateVisuals();
 	void RestoreLocallyHiddenSpectateMesh();

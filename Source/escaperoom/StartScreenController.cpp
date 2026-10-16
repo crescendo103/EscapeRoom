@@ -20,6 +20,13 @@ void AStartScreenController::BeginPlay()
 
 	if (!IsLocalController()) return; // Skip on non-local (server-side) controller instances
 
+	// [리슨] 매치(술래 PC) 접속이 끊겨서 엔진이 이 맵을 혼자 모드로 다시 연 경우:
+	// 러너 승리 화면 또는 바로 로비 재접속 (자동 접속/시작 화면보다 먼저 처리)
+	if (GetNetMode() == NM_Standalone && HandleMatchDisconnectResult())
+	{
+		return;
+	}
+
 	// [AWS] 패키징된 클라를 그냥 실행하면 로비 맵(LovyLv)이 서버 없이 혼자(Standalone) 열림 ->
 	// 설정된 로비 서버(EC2)로 자동 접속. 에디터 PIE에서는 기존 테스트 방식 그대로 두기 위해 건너뜀
 	if (GetNetMode() == NM_Standalone && GetWorld() && !GetWorld()->IsPlayInEditor())
@@ -161,11 +168,12 @@ void AStartScreenController::Server_SetReady_Implementation(bool bReady)
 	}
 }
 
-void AStartScreenController::Client_ConnectToMatch_Implementation(const FString& ServerAddress)
+FString AStartScreenController::GetUrlSafePlayerName() const
 {
-	// 매치 서버는 별도 프로세스라 로비의 PlayerState(이름 포함)가 따라가지 않음 ->
+	// 매치(술래 PC)는 로비와 다른 서버라 로비의 PlayerState(이름 포함)가 따라가지 않음 ->
 	// 로비 서버가 확정한 내 이름을 접속 URL 옵션(?PName=)으로 들고 감.
-	// 매치 서버의 AescaperoomGameMode::InitNewPlayer가 이 값을 읽어서 PlayerName으로 세팅함.
+	// 매치 쪽 AescaperoomGameMode::InitNewPlayer가 이 값을 읽어서 PlayerName으로 세팅함
+	// (술래는 OpenLevel URL에, 러너는 ClientTravel URL에 붙임)
 	FString MyName = PlayerState ? PlayerState->GetPlayerName() : FString();
 
 	// URL을 깨뜨리는 문자 제거 (서버에서도 한 번 더 거름)
@@ -173,44 +181,140 @@ void AStartScreenController::Client_ConnectToMatch_Implementation(const FString&
 	{
 		MyName.ReplaceInline(Bad, TEXT("_"));
 	}
+	return MyName;
+}
 
+void AStartScreenController::RememberCurrentLobbyAddress()
+{
 	// 매치가 끝나면 돌아올 수 있도록, 떠나기 직전에 "지금 접속해 있는 로비 서버 주소"를 GameInstance
 	// 메모장(UEscapeRoomSessionSubsystem)에 적어둠. 이 시점엔 아직 로비와 연결돼 있으므로 클라이언트의
-	// NetConnection(=로비 서버와의 연결) URL이 곧 내가 접속한 로비 주소. ClientTravel 이후엔 이 연결이
+	// NetConnection(=로비 서버와의 연결) URL이 곧 내가 접속한 로비 주소. 이동 이후엔 이 연결이
 	// 끊기고 컨트롤러/위젯도 새로 만들어지지만 GameInstance는 프로그램이 꺼질 때까지 유지됨.
 	// [AWS] 수정 불필요 - 로비에 EC2 공인 IP로 접속했다면 그 주소가 그대로 저장됨
-	if (UGameInstance* GI = GetGameInstance())
+	UGameInstance* GI = GetGameInstance();
+	UEscapeRoomSessionSubsystem* Session = GI ? GI->GetSubsystem<UEscapeRoomSessionSubsystem>() : nullptr;
+	if (!Session)
 	{
-		if (UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
-		{
-			FString Host;
-			int32 Port = 0;
-			if (const UNetConnection* Conn = GetNetConnection())
-			{
-				Host = Conn->URL.Host;
-				Port = Conn->URL.Port;
-			}
-			if (Host.IsEmpty() && GetWorld())
-			{
-				Host = GetWorld()->URL.Host;
-				Port = GetWorld()->URL.Port;
-			}
-			if (!Host.IsEmpty())
-			{
-				const FString LobbyAddress = FString::Printf(TEXT("%s:%d"), *Host, Port > 0 ? Port : FURL::UrlConfig.DefaultPort);
-				Session->SetLobbyAddress(LobbyAddress);
-				UE_LOG(LogTemp, Log, TEXT("[Session] Remembered lobby address: %s"), *LobbyAddress);
-			}
-		}
+		return;
+	}
+
+	FString Host;
+	int32 Port = 0;
+	if (const UNetConnection* Conn = GetNetConnection())
+	{
+		Host = Conn->URL.Host;
+		Port = Conn->URL.Port;
+	}
+	if (Host.IsEmpty() && GetWorld())
+	{
+		Host = GetWorld()->URL.Host;
+		Port = GetWorld()->URL.Port;
+	}
+	if (!Host.IsEmpty())
+	{
+		const FString LobbyAddress = FString::Printf(TEXT("%s:%d"), *Host, Port > 0 ? Port : FURL::UrlConfig.DefaultPort);
+		Session->SetLobbyAddress(LobbyAddress);
+		UE_LOG(LogTemp, Log, TEXT("[Session] Remembered lobby address: %s"), *LobbyAddress);
+	}
+}
+
+void AStartScreenController::Client_ConnectToMatch_Implementation(const FString& ServerAddress)
+{
+	// [리슨] 러너: 술래 PC(리슨서버)로 접속
+	RememberCurrentLobbyAddress();
+
+	if (UEscapeRoomSessionSubsystem* Session = GetGameInstance() ? GetGameInstance()->GetSubsystem<UEscapeRoomSessionSubsystem>() : nullptr)
+	{
+		Session->BeginMatch(/*bAsHost=*/false); // 이제부터 연결이 끊기면 "술래 이탈" 판정
 	}
 
 	FString TravelURL = ServerAddress;
+	const FString MyName = GetUrlSafePlayerName();
 	if (!MyName.IsEmpty())
 	{
 		TravelURL += FString::Printf(TEXT("?PName=%s"), *MyName);
 	}
 
+	UE_LOG(LogTemp, Log, TEXT("[Match] Runner -> connecting to chaser host: %s"), *TravelURL);
 	ClientTravel(TravelURL, TRAVEL_Absolute);
+}
+
+void AStartScreenController::Client_HostMatch_Implementation(int32 Port, int32 ExpectedPlayers)
+{
+	// [리슨] 술래로 뽑힘: 내 PC에서 GameLV를 리슨서버로 열고 러너들을 기다림.
+	// 로비와의 연결은 여기서 끊김(맵 이동) -> 로비 서버에선 Logout으로 방에서 빠짐
+	RememberCurrentLobbyAddress();
+
+	if (UEscapeRoomSessionSubsystem* Session = GetGameInstance() ? GetGameInstance()->GetSubsystem<UEscapeRoomSessionSubsystem>() : nullptr)
+	{
+		Session->BeginMatch(/*bAsHost=*/true);
+	}
+
+	// 리슨 포트: 맵 URL에 포트를 직접 지정할 수 없어서, 절대 경로 이동 시 URL 기본 포트로 쓰이는
+	// 전역 기본값(-port= 실행 인자와 같은 값)을 바꿔둠. 같은 PC에서 로비(7777)와 매치를 같이 띄워도 안 겹침.
+	// 실제로 열린 포트는 매치 GameMode 로그 "[Match] Listen server up on port"로 확인 가능
+	// (나중에 Steam으로 넘어가면 접속이 Steam ID 기반이라 포트는 의미 없어짐)
+	if (Port > 0)
+	{
+		FURL::UrlConfig.DefaultPort = Port;
+	}
+
+	FString Options = FString::Printf(TEXT("listen?ExpectedPlayers=%d"), ExpectedPlayers);
+	const FString MyName = GetUrlSafePlayerName();
+	if (!MyName.IsEmpty())
+	{
+		Options += FString::Printf(TEXT("?PName=%s"), *MyName);
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[Match] I'm the chaser -> hosting %s?%s on port %d"), *MatchLevelName.ToString(), *Options, Port);
+	UGameplayStatics::OpenLevel(this, MatchLevelName, true, Options);
+}
+
+bool AStartScreenController::HandleMatchDisconnectResult()
+{
+	UEscapeRoomSessionSubsystem* Session = GetGameInstance() ? GetGameInstance()->GetSubsystem<UEscapeRoomSessionSubsystem>() : nullptr;
+	if (!Session)
+	{
+		return false;
+	}
+
+	const EMatchDisconnectResult Result = Session->ConsumeDisconnectResult();
+	switch (Result)
+	{
+	case EMatchDisconnectResult::HostLeftRunnerWin:
+		// 술래가 매치 도중 나감 -> GameLV를 혼자 모드 + 결과 모드로 다시 열어서
+		// 기존 결과 방(러너 승리) + EscapeFadeWidget 엔딩을 그대로 재생 (ADungeonPlayerController::ShowHostLeftResult).
+		// 시작 화면/로비 BGM은 띄우지 않고 바로 넘어감. 로비 복귀는 엔딩의 "로비로" 버튼(ReturnToLobby)
+		UE_LOG(LogTemp, Log, TEXT("[Match] Chaser(host) left mid-match -> opening %s in result mode (runners win)"), *MatchLevelName.ToString());
+		UGameplayStatics::OpenLevel(this, MatchLevelName, true, UEscapeRoomSessionSubsystem::HostLeftResultOption);
+		return true;
+
+	case EMatchDisconnectResult::ReturnToLobby:
+		UE_LOG(LogTemp, Log, TEXT("[Match] Disconnected from match after it ended (or could not join) -> back to lobby"));
+		TravelBackToLobby();
+		return true;
+
+	default:
+		return false;
+	}
+}
+
+void AStartScreenController::TravelBackToLobby()
+{
+	UEscapeRoomSessionSubsystem* Session = GetGameInstance() ? GetGameInstance()->GetSubsystem<UEscapeRoomSessionSubsystem>() : nullptr;
+	const FString LobbyAddress = Session ? Session->GetLobbyAddressForReturn() : UEscapeRoomSessionSubsystem::GetConfiguredLobbyAddress();
+
+	if (LobbyAddress.IsEmpty())
+	{
+		// 돌아갈 주소가 없음 -> 그냥 시작 화면 (로비 없이 혼자)
+		UE_LOG(LogTemp, Warning, TEXT("[Match] 돌아갈 로비 주소가 없음 - 시작 화면 표시"));
+		ShowStartScreenWidget();
+		StartLobbyBGM();
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[Match] Returning to lobby: %s"), *LobbyAddress);
+	ClientTravel(LobbyAddress, TRAVEL_Absolute);
 }
 
 void AStartScreenController::Debug_CreateRoom(const FString& RoomName)

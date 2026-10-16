@@ -112,6 +112,9 @@ protected:
     // 조종 컨트롤러가 바뀔 때(서버 PossessedBy + 클라 OnRep_Controller 경유) 호출 - 공포 반경 사운드 on/off 재판단
     virtual void NotifyControllerChanged() override;
 
+    // [리슨] 공통 IMC(부모) + 술래 전용 IMC 추가 (BeginPlay에서 옮겨옴 - 호스트에서 키가 안 먹던 문제)
+    virtual void AddLocalInputMappings(UEnhancedInputLocalPlayerSubsystem* Subsystem) override;
+
     // ---- 공포 반경(Terror Radius) 사운드 ----
     // 술래 몸에 붙은 루프 BGM. 각 도망자 클라이언트에서 재생되고, Attenuation 반경 안에 들어온 사람에게만 들림.
     // 술래 본인 화면(IsLocallyControlled)과 데디서버에서는 재생하지 않음. 네트워크 복제/RPC 없음 - 각 머신이 로컬로 판단.

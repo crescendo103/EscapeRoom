@@ -47,13 +47,23 @@ public:
 	TArray<TSubclassOf<APawn>> RunnerPawnClasses;
 
 	// 몇 번째로 접속한 플레이어를 술래로 할지 (0부터). 1로 바꾸면 두 번째 창이 술래가 됨
+	// [리슨] 실제 매치(술래 PC가 리슨서버)에서는 이 값과 상관없이 "호스트 본인 = 술래".
+	//        이 값은 에디터 PIE(데디/Standalone 넷모드) 테스트에서만 쓰임
 	UPROPERTY(EditDefaultsOnly, Category = "Debug|Roles", meta = (ClampMin = "0"))
 	int32 ChaserPlayerIndex = 0;
+
+	// [리슨] 로비가 넘겨준 인원이 다 모일 때까지 맵 생성을 미루는 중인지.
+	// AWFCGridManager::BeginPlay가 이걸 보고 자동 생성을 건너뜀 (InitGame이 레벨 액터 BeginPlay보다 먼저라 안전)
+	bool IsWaitingForPlayers() const { return ExpectedPlayers > 0 && !bMapGenerationRequested; }
 
 	// 스폰할 폰 클래스를 플레이어마다 결정 (엔진이 RestartPlayer → SpawnDefaultPawnFor 과정에서 호출)
 	virtual UClass* GetDefaultPawnClassForController_Implementation(AController* InController) override;
 
 protected:
+	// [리슨] 맵 URL 옵션 읽기 (?ExpectedPlayers=N). 술래가 OpenLevel("GameLV", "listen?ExpectedPlayers=N")로 엶.
+	// InitGameState는 GameMode 스폰 도중(InitGame보다 먼저) 불려서 그 시점엔 OptionsString이 비어있음 -> 여기서 읽음
+	virtual void InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) override;
+
 	// GameState가 만들어진 직후 - 게임 종료 이벤트(OnAllRunnersResolved) 구독
 	virtual void InitGameState() override;
 
@@ -77,8 +87,8 @@ protected:
 	// 제한시간 종료 -> HandleAllRunnersResolved()와 동일한 결과 집계 + 종료 화면
 	void HandleMatchTimeUp();
 
-	// Used when this GameMode runs as a per-room match server: shut the
-	// process down once every player has left, so it doesn't linger.
+	// [데디 매치 서버일 때만] 전원이 나가면 프로세스 종료.
+	// [리슨] 술래 PC에서는 절대 종료하면 안 됨(호스트 본인 게임이 꺼짐) -> NM_DedicatedServer일 때만 동작
 	virtual void Logout(AController* Exiting) override;
 
 	// 플레이어가 접속을 완료할 때마다 호출됨(서버 전용). 술래는 항상 1명 고정이므로,
@@ -127,9 +137,9 @@ protected:
 	int32 NextRunnerStartIndex = 0;
 	int32 NextChaserStartIndex = 0;
 
-	// ===== 맵 생성 시작 시점 (데디 매치 서버 전용) =====
-	// 로비가 매치 서버를 띄울 때 넘긴 -ExpectedPlayers=N. 0이면(에디터 PIE 등) 대기하지 않고
-	// WFCGridManager가 BeginPlay에서 예전처럼 바로 생성한다
+	// ===== 맵 생성 시작 시점 =====
+	// [리슨] 술래가 연 맵 URL의 ?ExpectedPlayers=N (술래 포함 방 인원). 0이면(에디터 PIE 등) 대기하지 않고
+	// WFCGridManager가 BeginPlay에서 예전처럼 바로 생성한다. (데디 시절엔 -ExpectedPlayers= 실행 인자)
 	int32 ExpectedPlayers = 0;
 
 	// 첫 플레이어 접속 후 이 시간(초)이 지나도 인원이 다 안 모이면 있는 인원으로 생성 시작 (이동 중 튕긴 사람 대비)
