@@ -160,6 +160,9 @@ protected:
 	virtual void AcknowledgePossession(APawn* P) override;
 	virtual void SetupInputComponent() override;
 
+	// 클라: 내 화면(LocalPlayer)이 이 컨트롤러에 연결되는 순간 - BeginPlay보다 늦게 올 수 있어서 여기서도 UI 초기화
+	virtual void ReceivedPlayer() override;
+
 	// [리슨] 서버에서 이 플레이어가 나갈 때(접속 끊김) 엔진이 호출 -> 기본 동작은 조종 중인 폰을 Destroy.
 	// 캐비넷에 숨은 채로 나가면 캐비넷이 지워지는 걸 막기 위해, 먼저 도망자에게 조종권을 돌려놓고 Super 호출
 	virtual void PawnLeavingGame() override;
@@ -254,7 +257,24 @@ private:
 	void ShowLocalMatchEnd(const FText& ResultMessage, EMatchResultRoomType RoomType);
 
 	// [리슨] 술래 이탈 결과 모드(GameLV?HostLeftResult, 혼자 모드): 저장해둔 내 외형으로 러너 승리 엔딩
+	// [로비 엔딩] 술래 이탈 엔딩도 이제 로비에서 재생하므로 이 경로는 더 이상 쓰이지 않음 (호환용으로만 남김)
 	void ShowHostLeftResult();
+
+	// ---- [로비 엔딩] 결과 방 연출을 로비 맵에서 재생 ----
+	// 게임 종료 암전이 끝나면(HandleMatchEndBlack) 결과 방 대신 로비로 이동할지.
+	// 로비 주소가 없을 때(PIE로 GameLV를 바로 실행 등)는 false -> 예전처럼 GameLV 안에서 결과 방을 보여줌
+	bool bTravelToLobbyOnMatchEndBlack = false;
+
+	// 로딩 화면 등 로컬 UI 초기화 (BeginPlay 또는 ReceivedPlayer 중 LocalPlayer가 붙은 쪽에서 1회)
+	void InitLocalUI();
+	bool bLocalUIInitialized = false;
+	FString PendingLobbyTravelAddress;
+
+	// 돌아갈 로비 주소 (GameInstance 메모 > 설정 파일 > BP 예비값). 없으면 빈 문자열
+	FString ResolveLobbyAddress() const;
+
+	// 결과는 GameInstance에 저장된 상태로 로비로 이동 (로비의 AStartScreenController가 엔딩 재생)
+	void TravelToLobbyForResult();
 	void OnSpectateNextInput(const FInputActionValue& Value);
 	void UpdateLocalSpectateVisuals();
 	void RestoreLocallyHiddenSpectateMesh();

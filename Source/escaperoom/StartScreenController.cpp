@@ -13,6 +13,8 @@
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 #include "Components/AudioComponent.h"
+#include "EscapeFadeWidget.h"
+#include "ResultRoomActor.h"
 
 void AStartScreenController::BeginPlay()
 {
@@ -20,8 +22,34 @@ void AStartScreenController::BeginPlay()
 
 	if (!IsLocalController()) return; // Skip on non-local (server-side) controller instances
 
-	// [리슨] 매치(술래 PC) 접속이 끊겨서 엔진이 이 맵을 혼자 모드로 다시 연 경우:
-	// 러너 승리 화면 또는 바로 로비 재접속 (자동 접속/시작 화면보다 먼저 처리)
+	// 클라: 내 화면(LocalPlayer) 연결이 BeginPlay보다 늦게 올 수 있음 -> 그 경우 ReceivedPlayer()에서 초기화
+	if (!GetLocalPlayer())
+	{
+		return;
+	}
+	InitLocalLobby();
+}
+
+void AStartScreenController::ReceivedPlayer()
+{
+	Super::ReceivedPlayer();
+
+	if (HasActorBegunPlay() && IsLocalController() && GetLocalPlayer())
+	{
+		InitLocalLobby();
+	}
+}
+
+void AStartScreenController::InitLocalLobby()
+{
+	if (bLocalLobbyInitialized)
+	{
+		return;
+	}
+	bLocalLobbyInitialized = true;
+
+	// [리슨] 매치(술래 PC) 접속이 끊겨서 엔진이 이 맵을 혼자 모드로 다시 연 경우: 로비 재접속
+	// (자동 접속/시작 화면보다 먼저 처리. 결과가 저장돼 있으면 로비에 도착한 뒤 아래에서 엔딩 재생)
 	if (GetNetMode() == NM_Standalone && HandleMatchDisconnectResult())
 	{
 		return;
@@ -44,6 +72,12 @@ void AStartScreenController::BeginPlay()
 			}
 			UE_LOG(LogTemp, Warning, TEXT("[Session] 로비 주소 설정이 비어있음 (DefaultGame.ini [EscapeRoom.Network] LobbyAddress 또는 -LobbyAddress=) - 자동 접속 안 함"));
 		}
+	}
+
+	// [로비 엔딩] 판이 끝나고 돌아온 경우: 시작 화면 대신 결과 방 엔딩 (버튼 누르면 FinishMatchResult -> 시작 화면)
+	if (ShowPendingMatchResult())
+	{
+		return;
 	}
 
 	ShowStartScreenWidget();
@@ -281,16 +315,9 @@ bool AStartScreenController::HandleMatchDisconnectResult()
 	const EMatchDisconnectResult Result = Session->ConsumeDisconnectResult();
 	switch (Result)
 	{
-	case EMatchDisconnectResult::HostLeftRunnerWin:
-		// 술래가 매치 도중 나감 -> GameLV를 혼자 모드 + 결과 모드로 다시 열어서
-		// 기존 결과 방(러너 승리) + EscapeFadeWidget 엔딩을 그대로 재생 (ADungeonPlayerController::ShowHostLeftResult).
-		// 시작 화면/로비 BGM은 띄우지 않고 바로 넘어감. 로비 복귀는 엔딩의 "로비로" 버튼(ReturnToLobby)
-		UE_LOG(LogTemp, Log, TEXT("[Match] Chaser(host) left mid-match -> opening %s in result mode (runners win)"), *MatchLevelName.ToString());
-		UGameplayStatics::OpenLevel(this, MatchLevelName, true, UEscapeRoomSessionSubsystem::HostLeftResultOption);
-		return true;
-
 	case EMatchDisconnectResult::ReturnToLobby:
-		UE_LOG(LogTemp, Log, TEXT("[Match] Disconnected from match after it ended (or could not join) -> back to lobby"));
+		// 엔딩 후 끊김 / 술래 도중 이탈(러너 승리 결과가 저장됨) / 접속 실패 -> 로비로. 엔딩은 로비 도착 후 재생
+		UE_LOG(LogTemp, Log, TEXT("[Match] Disconnected from match (pending result=%d) -> back to lobby"), Session->HasPendingMatchResult() ? 1 : 0);
 		TravelBackToLobby();
 		return true;
 
@@ -306,8 +333,12 @@ void AStartScreenController::TravelBackToLobby()
 
 	if (LobbyAddress.IsEmpty())
 	{
-		// 돌아갈 주소가 없음 -> 그냥 시작 화면 (로비 없이 혼자)
+		// 돌아갈 주소가 없음 -> 여기(혼자 모드 LovyLv)서 엔딩이 있으면 보여주고, 없으면 그냥 시작 화면
 		UE_LOG(LogTemp, Warning, TEXT("[Match] 돌아갈 로비 주소가 없음 - 시작 화면 표시"));
+		if (ShowPendingMatchResult())
+		{
+			return;
+		}
 		ShowStartScreenWidget();
 		StartLobbyBGM();
 		return;
@@ -338,4 +369,134 @@ void AStartScreenController::Client_PlayAllReadySound_Implementation()
 	{
 		UGameplayStatics::PlaySound2D(this, AllReadySound);
 	}
+}
+
+// =========================== [로비 엔딩] 결과 방 연출 ===========================
+
+bool AStartScreenController::ShowPendingMatchResult()
+{
+	UEscapeRoomSessionSubsystem* Session = GetGameInstance() ? GetGameInstance()->GetSubsystem<UEscapeRoomSessionSubsystem>() : nullptr;
+	if (!Session || !Session->HasPendingMatchResult())
+	{
+		return false;
+	}
+
+	if (!ResultFadeWidgetClass)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[Lobby][Result] ResultFadeWidgetClass가 비어있음 - StartScreenController BP Class Defaults에서 WBP_EscapeFade 지정 필요"));
+		Session->ClearPendingMatchResult();
+		return false;
+	}
+
+	const EMatchResultRoomType RoomType = Session->GetPendingResultRoomType();
+	FText Message = Session->GetPendingResultMessage();
+	if (Session->IsPendingResultHostLeft() && Message.IsEmpty())
+	{
+		Message = HostLeftResultMessage;
+	}
+
+	AResultRoomActor* Room = AResultRoomActor::FindRoom(this, RoomType);
+	ActiveResultRoom = Room;
+	if (!Room)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Lobby][Result] 결과 방(RoomType=%d)이 로비 맵(LovyLv)에 없음 - 검은 화면 결과로 대체"), (int32)RoomType);
+	}
+
+	// 시작 화면 등 다른 로비 위젯이 떠 있으면 정리
+	if (ActiveWidget)
+	{
+		ActiveWidget->RemoveFromParent();
+		ActiveWidget = nullptr;
+	}
+
+	ResultFadeWidget = CreateWidget<UEscapeFadeWidget>(this, ResultFadeWidgetClass);
+	if (!ResultFadeWidget)
+	{
+		Session->ClearPendingMatchResult();
+		return false;
+	}
+	ResultFadeWidget->AddToViewport(50);
+
+	// 로비 풍경이 비치지 않게 완전히 검은 화면에서 시작 -> 결과 방 공개 (매치에서 하던 연출과 동일한 흐름)
+	ResultFadeWidget->SnapToBlack();
+	ResultFadeWidget->OnMatchEndBlack.AddUObject(this, &AStartScreenController::HandleResultFadeBlack);
+
+	// 버튼이 뜨기 전까지는 클릭/키 입력 무시 (버튼이 뜨면 위젯이 GameAndUI + 커서로 바꿔줌)
+	SetInputMode(FInputModeUIOnly());
+	bShowMouseCursor = false;
+
+	UE_LOG(LogTemp, Log, TEXT("[Lobby][Result] Showing match result ending: RoomType=%d HostLeft=%d"),
+		(int32)RoomType, Session->IsPendingResultHostLeft() ? 1 : 0);
+
+	ResultFadeWidget->StartMatchEndFade(Message,
+		Room ? Room->ResultTitle : FText::GetEmpty(),
+		Room ? Room->ResultTitleColor : FLinearColor::White,
+		/*bRevealResultRoom=*/Room != nullptr);
+	return true;
+}
+
+void AStartScreenController::HandleResultFadeBlack()
+{
+	AResultRoomActor* Room = ActiveResultRoom.Get();
+	if (!Room)
+	{
+		return;
+	}
+
+	// 매치에서 플레이한 내 캐릭터 외형 (GameInstance에 저장돼 있음 - 컨트롤러가 바뀌어도 남아있음)
+	if (const UEscapeRoomSessionSubsystem* Session = GetGameInstance() ? GetGameInstance()->GetSubsystem<UEscapeRoomSessionSubsystem>() : nullptr)
+	{
+		Room->ApplyCharacter(Session->GetResultMesh(), Session->GetResultMaterials());
+	}
+
+	bShowingResultRoom = true;
+	SetViewTarget(Room);
+}
+
+void AStartScreenController::FinishMatchResult()
+{
+	if (UEscapeRoomSessionSubsystem* Session = GetGameInstance() ? GetGameInstance()->GetSubsystem<UEscapeRoomSessionSubsystem>() : nullptr)
+	{
+		Session->ClearPendingMatchResult();
+	}
+
+	bShowingResultRoom = false;
+	ActiveResultRoom = nullptr;
+
+	if (ResultFadeWidget)
+	{
+		ResultFadeWidget->RemoveFromParent();
+		ResultFadeWidget = nullptr;
+	}
+
+	// 로비 원래 시점으로 복귀 (레벨의 Auto Activate 카메라 / 폰 등 엔진 기본 규칙)
+	AutoManageActiveCameraTarget(GetPawn());
+
+	ShowStartScreenWidget();
+	StartLobbyBGM();
+}
+
+void AStartScreenController::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	// 서버 쪽 시점 전환(ClientSetViewTarget 등)이 늦게 도착해도 결과 방 시점 유지
+	if (bShowingResultRoom && IsLocalController() && ActiveResultRoom.IsValid() && GetViewTarget() != ActiveResultRoom.Get())
+	{
+		SetViewTarget(ActiveResultRoom.Get());
+	}
+}
+
+void AStartScreenController::AutoManageActiveCameraTarget(AActor* SuggestedTarget)
+{
+	if (bShowingResultRoom && ActiveResultRoom.IsValid())
+	{
+		if (GetViewTarget() != ActiveResultRoom.Get())
+		{
+			SetViewTarget(ActiveResultRoom.Get());
+		}
+		return;
+	}
+
+	Super::AutoManageActiveCameraTarget(SuggestedTarget);
 }

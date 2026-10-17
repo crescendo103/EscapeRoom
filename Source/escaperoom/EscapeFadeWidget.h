@@ -2,6 +2,8 @@
 //
 // [설계 메모] 매치에서 빠져나가는 모든 플레이어가 반드시 거쳐가는 "비네트 암전 + 안내 + 로비 복귀" 위젯.
 // ADungeonPlayerController가 생성해서 화면에 붙이며, 로비로 돌아가는 유일한 경로가 이 위젯의 버튼이다.
+// [로비 엔딩] 게임 종료 결과 방 연출은 이제 로비 맵에서 AStartScreenController도 이 위젯으로 재생한다
+// (그 경우 버튼 = 결과 화면 닫고 시작 화면으로).
 //
 // 두 가지 모드:
 //   [탈출 모드] StartEscapeFade() - 러너가 탈출에 성공했을 때 (ClientBeginEscape)
@@ -46,6 +48,15 @@ public:
 		FLinearColor TitleColor = FLinearColor::White, bool bRevealResultRoom = false);
 
 	bool IsInMatchEndMode() const { return bMatchEndMode; }
+
+	// [로비 엔딩] 화면을 즉시 완전히 검게 만듦 (페이드 없이). 로비에서 엔딩을 시작할 때 StartMatchEndFade 전에 호출하면
+	// 로비 풍경이 비치지 않고 검은 화면 -> 결과 방 공개로 바로 이어짐
+	void SnapToBlack();
+
+	// [로비 엔딩] 암전 전용: 문구/버튼을 전부 숨기고 지금 반경에서 0까지 암전만 한 뒤, 완전히 검어지면
+	// OnMatchEndBlack을 1회 쏘고 그대로 검은 화면 유지 (다시 열리거나 결과 문구/버튼을 띄우지 않음).
+	// GameLV에서 판이 끝났을 때 사용 - 검은 화면 그대로 로비로 이동하고, 결과 UI는 로비에서 띄움
+	void StartFadeToBlackOnly();
 
 	// [탈출 모드 전용] 완전히 검어진 순간 1회 브로드캐스트 (게임 종료 모드에서는 안 쏨)
 	FOnEscapeFadeOutFinished OnFadeOutFinished;
@@ -127,7 +138,8 @@ protected:
 	FText SpectateFormatText = NSLOCTEXT("EscapeFade", "Spectate", "Spectating: {0}    Press Space for next player");
 
 private:
-	enum class EPhase : uint8 { Idle, FadeOut, HoldBlack, FadeIn, Spectating, MatchEnd };
+	// FinalBlack: 암전 전용 모드의 마지막 단계 (검은 화면에서 영구 정지)
+	enum class EPhase : uint8 { Idle, FadeOut, HoldBlack, FadeIn, Spectating, MatchEnd, FinalBlack };
 
 	UFUNCTION()
 	void HandleReturnToLobbyClicked();
@@ -150,6 +162,7 @@ private:
 
 	bool bMatchEndMode = false;
 	bool bRevealResultRoom = false;
+	bool bFadeToBlackOnly = false;
 	FText PendingResultMessage;
 	FText PendingTitle;
 	FLinearColor PendingTitleColor = FLinearColor::White;

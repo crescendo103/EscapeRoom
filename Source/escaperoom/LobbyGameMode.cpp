@@ -102,9 +102,15 @@ void ALobbyGameMode::CheckRoomReadyState(int32 RoomId)
 
 	if (bEnough && bAllReady)
 	{
-		// [변경] 5초 카운트다운 제거 - 전원 Ready 되는 순간 효과음과 함께 바로 매치 서버를 띄움
-		// (CountdownSeconds를 0으로 두면 SetTimer가 아예 안 돌아서 직접 호출로 바꿈)
-		UE_LOG(LogTemp, Log, TEXT("[Lobby] Room %d: all ready, starting match immediately"), RoomId);
+		// 이미 대기 중이면(입장/퇴장 등으로 다시 불림) 효과음/타이머를 다시 걸지 않음
+		if (Room->bCountdownActive)
+		{
+			return;
+		}
+
+		// 전원 Ready -> 효과음(울음소리) -> AllReadyStartDelaySeconds 뒤 매치 시작 (효과음을 다 듣고 넘어가게).
+		// 술래는 매치 시작 순간 맵을 옮기므로, 바로 시작하면 효과음이 끊겨서 안 들렸음
+		UE_LOG(LogTemp, Log, TEXT("[Lobby] Room %d: all ready, starting match in %.1fs"), RoomId, AllReadyStartDelaySeconds);
 
 		for (TObjectPtr<APlayerState> Member : Room->Members)
 		{
@@ -114,8 +120,20 @@ void ALobbyGameMode::CheckRoomReadyState(int32 RoomId)
 			}
 		}
 
-		// 위에서 bMatchStarted면 return하므로, 여기서 true가 되면 이후 입장/퇴장/Ready 변경으로 재시작되지 않음
-		OnRoomCountdownFinished(RoomId);
+		if (AllReadyStartDelaySeconds <= 0.f)
+		{
+			OnRoomCountdownFinished(RoomId); // 대기 없이 바로
+			return;
+		}
+
+		Room->bCountdownActive = true;
+		Room->CountdownEndServerTime = GetWorld()->GetTimeSeconds() + AllReadyStartDelaySeconds;
+
+		// OnRoomCountdownFinished에서 bMatchStarted = true가 되면 이후 입장/퇴장/Ready 변경으로 재시작되지 않음
+		FTimerHandle& Handle = RoomCountdownTimers.FindOrAdd(RoomId);
+		GetWorldTimerManager().SetTimer(Handle,
+			FTimerDelegate::CreateUObject(this, &ALobbyGameMode::OnRoomCountdownFinished, RoomId),
+			AllReadyStartDelaySeconds, false);
 	}
 	else
 	{

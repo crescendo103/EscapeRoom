@@ -41,8 +41,9 @@ private:
 	// 로비 퇴장(술래가 리슨서버를 열러 떠남, 러너가 술래 PC로 떠남, 게임 종료 등) -> 방에서 빼기
 	virtual void Logout(AController* Exiting) override;
 
-	// [변경] 카운트다운 제거로 미사용 - 전원 Ready 시 바로 시작 (LobbyGameMode.cpp CheckRoomReadyState)
-	// static constexpr float CountdownSeconds = 5.f;
+	// 전원 Ready 효과음(울음소리)을 다 듣고 매치로 넘어가도록 기다리는 시간(초). 0이면 바로 시작.
+	// 대기 중 누가 Ready를 풀거나 나가면 취소됨 (CancelRoomCountdown). 효과음 길이에 맞춰 조절
+	static constexpr float AllReadyStartDelaySeconds = 6.f;
 
 	// 술래 리슨 포트 범위 = BasePort ~ BasePort + MaxMatchPorts - 1 (7778~7787), 매치마다 돌아가며 사용.
 	// 같은 PC에서 로비(7777)와 여러 매치를 동시에 테스트할 때 포트가 안 겹치게 하려는 용도.

@@ -7,10 +7,13 @@
 // [구조] 로비 = EC2 데디서버 / 매치(GameLV) = 술래 PC 리슨서버
 //   - 매치로 떠나기 직전(러너: Client_ConnectToMatch, 술래: Client_HostMatch) 지금 접속해 있는 로비 주소를 저장
 //     -> 매치가 끝나면 ADungeonPlayerController::ReturnToLobby가 꺼내 씀
+//   - [로비 엔딩] 판이 끝나면 결과(결과 방 종류 + 문구)를 여기 저장해두고 전원 로비로 이동 ->
+//     로비 맵(LovyLv)의 AStartScreenController가 저장된 결과로 결과 방 엔딩을 재생 (술래 PC에 의존하지 않음)
 //   - 매치 도중 호스트(술래) PC와 연결이 끊기면 엔진이 강제로 기본 맵(LovyLv, 혼자 모드)으로 보냄.
-//     이때 "엔딩을 이미 받았는지"를 보고 결과를 남겨두면, LovyLv의 AStartScreenController::BeginPlay가
-//     - 엔딩 전: GameLV를 혼자 모드 + ?HostLeftResult 로 다시 열어서 기존 결과 방/엔딩 UI로 러너 승리 연출
-//     - 엔딩 후: 바로 로비로 재접속
+//     이때 "엔딩을 이미 받았는지"를 보고
+//     - 엔딩 전: 러너 승리(술래 이탈) 결과를 저장
+//     - 엔딩 후: 이미 저장된 결과 그대로
+//     어느 쪽이든 LovyLv에서 로비로 재접속한 뒤 저장된 결과로 엔딩을 보여줌
 
 #pragma once
 
@@ -25,13 +28,13 @@
 class UNetDriver;
 class USkeletalMesh;
 class UMaterialInterface;
+enum class EMatchResultRoomType : uint8; // ResultRoomActor.h
 
 // 매치 접속이 끊긴 뒤 시작 맵(LovyLv)에서 처리할 일
 enum class EMatchDisconnectResult : uint8
 {
 	None,               // 처리할 것 없음 (평소 실행)
-	HostLeftRunnerWin,  // 엔딩 전에 호스트(술래)가 나감 -> GameLV 결과 모드로 러너 승리 연출 후 로비 복귀
-	ReturnToLobby,      // 엔딩 후 끊김 / 술래 PC 접속 실패 -> 바로 로비 복귀
+	ReturnToLobby,      // 매치 접속이 끊김(엔딩 전/후, 술래 PC 접속 실패) -> 로비 재접속 (결과가 저장돼 있으면 로비에서 엔딩)
 };
 
 UCLASS()
@@ -101,6 +104,16 @@ public:
 	USkeletalMesh* GetResultMesh() const { return ResultMesh; }
 	const TArray<TObjectPtr<UMaterialInterface>>& GetResultMaterials() const { return ResultMaterials; }
 
+	// ---------------- 로비 엔딩용 결과 ----------------
+	// 판 결과 저장 (ClientShowMatchEnd / 술래 이탈 감지 시). bHostLeft=true면 문구는 로비 쪽 HostLeftResultMessage를 씀
+	void SetPendingMatchResult(EMatchResultRoomType RoomType, const FText& Message, bool bHostLeft = false);
+	bool HasPendingMatchResult() const { return bHasPendingMatchResult; }
+	EMatchResultRoomType GetPendingResultRoomType() const { return PendingResultRoomType; }
+	const FText& GetPendingResultMessage() const { return PendingResultMessage; }
+	bool IsPendingResultHostLeft() const { return bPendingResultHostLeft; }
+	// 로비에서 엔딩을 다 보고 Exit Game을 눌렀을 때 (또는 새 매치 시작 시) 비움
+	void ClearPendingMatchResult();
+
 	// 시작 맵에서 한 번 꺼내 쓰고 비움
 	EMatchDisconnectResult ConsumeDisconnectResult()
 	{
@@ -117,6 +130,11 @@ private:
 	bool bIsMatchHost = false;
 	bool bMatchResultReceived = false;
 	EMatchDisconnectResult PendingDisconnectResult = EMatchDisconnectResult::None;
+
+	bool bHasPendingMatchResult = false;
+	bool bPendingResultHostLeft = false;
+	EMatchResultRoomType PendingResultRoomType{};
+	FText PendingResultMessage;
 
 	UPROPERTY()
 	TObjectPtr<USkeletalMesh> ResultMesh;

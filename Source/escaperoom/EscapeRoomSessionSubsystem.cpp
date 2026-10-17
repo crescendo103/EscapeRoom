@@ -7,6 +7,7 @@
 #include "Engine/NetDriver.h"
 #include "Engine/SkeletalMesh.h"
 #include "Materials/MaterialInterface.h"
+#include "ResultRoomActor.h"
 
 void UEscapeRoomSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -35,7 +36,25 @@ void UEscapeRoomSessionSubsystem::BeginMatch(bool bAsHost)
 	bIsMatchHost = bAsHost;
 	bMatchResultReceived = false;
 	PendingDisconnectResult = EMatchDisconnectResult::None;
+	ClearPendingMatchResult(); // 지난 판 결과가 남아있지 않게
 	UE_LOG(LogTemp, Log, TEXT("[Session] Begin match as %s"), bAsHost ? TEXT("HOST (Chaser)") : TEXT("client (Runner)"));
+}
+
+void UEscapeRoomSessionSubsystem::SetPendingMatchResult(EMatchResultRoomType RoomType, const FText& Message, bool bHostLeft)
+{
+	bHasPendingMatchResult = true;
+	PendingResultRoomType = RoomType;
+	PendingResultMessage = Message;
+	bPendingResultHostLeft = bHostLeft;
+	UE_LOG(LogTemp, Log, TEXT("[Session] Pending match result saved: RoomType=%d HostLeft=%d"), (int32)RoomType, bHostLeft ? 1 : 0);
+}
+
+void UEscapeRoomSessionSubsystem::ClearPendingMatchResult()
+{
+	bHasPendingMatchResult = false;
+	bPendingResultHostLeft = false;
+	PendingResultRoomType = EMatchResultRoomType{};
+	PendingResultMessage = FText::GetEmpty();
 }
 
 void UEscapeRoomSessionSubsystem::EndMatch()
@@ -74,9 +93,13 @@ void UEscapeRoomSessionSubsystem::HandleNetworkFailure(UWorld* World, UNetDriver
 		return; // 데모(리플레이) 등 다른 넷드라이버
 	}
 
-	PendingDisconnectResult = bMatchResultReceived
-		? EMatchDisconnectResult::ReturnToLobby       // 엔딩을 이미 봤음 -> 조용히 로비로
-		: EMatchDisconnectResult::HostLeftRunnerWin;  // 매치 도중 술래가 나감 -> 러너 승리
+	// [로비 엔딩] 엔딩을 이미 받았으면 결과는 ClientShowMatchEnd에서 저장돼 있음 -> 그대로 로비로.
+	// 엔딩 전에 끊겼으면 = 매치 도중 술래가 나감 -> 러너 승리 결과를 저장 (로비에서 RunnerWin 결과 방 엔딩)
+	if (!bMatchResultReceived)
+	{
+		SetPendingMatchResult(EMatchResultRoomType::RunnerWin, FText::GetEmpty(), /*bHostLeft=*/true);
+	}
+	PendingDisconnectResult = EMatchDisconnectResult::ReturnToLobby;
 	bInMatch = false;
 
 	UE_LOG(LogTemp, Warning, TEXT("[Session] Lost connection to match host (%s: %s) -> %s"),

@@ -42,6 +42,35 @@ void ADungeonPlayerController::BeginPlay()
 		return;
 	}
 
+	// 클라이언트는 컨트롤러가 복제돼서 BeginPlay가 먼저 불리고, 내 화면(LocalPlayer) 연결은 그 뒤에 옴.
+	// 연결 전에 위젯을 만들면 "CreateWidget cannot be used on Player Controller with no attached player"로 실패
+	// (로딩 화면이 안 뜸) -> 아직이면 ReceivedPlayer()에서 초기화
+	if (!GetLocalPlayer())
+	{
+		return;
+	}
+	InitLocalUI();
+}
+
+void ADungeonPlayerController::ReceivedPlayer()
+{
+	Super::ReceivedPlayer();
+
+	// BeginPlay 이후에 LocalPlayer가 연결된 경우 (BeginPlay 전이면 BeginPlay가 처리)
+	if (HasActorBegunPlay() && IsLocalController() && GetLocalPlayer())
+	{
+		InitLocalUI();
+	}
+}
+
+void ADungeonPlayerController::InitLocalUI()
+{
+	if (bLocalUIInitialized)
+	{
+		return;
+	}
+	bLocalUIInitialized = true;
+
 	// [리슨] 술래가 매치 도중 나가서 GameLV를 혼자 모드 결과 모드(?HostLeftResult)로 다시 연 경우:
 	// 맵 생성/로딩 위젯 없이 바로 러너 승리 엔딩 (WFCGridManager도 이 모드에선 생성을 안 함)
 	if (UEscapeRoomSessionSubsystem::IsHostLeftResultWorld(GetWorld()))
@@ -523,6 +552,16 @@ void ADungeonPlayerController::ClientShowMatchEnd_Implementation(int32 EscapedCo
 		UE_LOG(LogTemp, Warning, TEXT("[MatchEnd][Debug] bDebugForceRunnerWinResult ON -> RoomType=%d"), (int32)RoomType);
 	}
 
+	// [로비 엔딩] 결과를 GameInstance에 저장 - 이후 술래(호스트)가 먼저 나가서 연결이 끊기든, 내가 직접 로비로
+	// 이동하든 로비 맵에서 이 결과로 엔딩을 재생함 (내 캐릭터 외형은 빙의 시점에 이미 저장돼 있음)
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		if (UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
+		{
+			Session->SetPendingMatchResult(RoomType, Result);
+		}
+	}
+
 	ShowLocalMatchEnd(Result, RoomType);
 }
 
@@ -532,6 +571,30 @@ void ADungeonPlayerController::ShowLocalMatchEnd(const FText& ResultMessage, EMa
 	// 결과 방 선택 -> EscapeFadeWidget 암전 -> 완전히 검어지면 HandleMatchEndBlack에서 결과 방으로 시점 전환
 	const FText& Result = ResultMessage;
 
+	// [로비 엔딩] 로비로 돌아갈 수 있으면 여기서는 암전만 하고, 완전히 검어지면 로비로 이동 (HandleMatchEndBlack).
+	// 결과 방 연출은 로비 맵에서 AStartScreenController가 저장된 결과로 재생함 -> 술래 PC(리슨서버)가 먼저 꺼져도 엔딩이 안 끊김
+	const FString LobbyAddress = ResolveLobbyAddress();
+	if (!LobbyAddress.IsEmpty() && !UEscapeRoomSessionSubsystem::IsHostLeftResultWorld(GetWorld()))
+	{
+		bTravelToLobbyOnMatchEndBlack = true;
+		PendingLobbyTravelAddress = LobbyAddress;
+
+		if (UEscapeFadeWidget* Widget = EnsureEscapeFadeWidget())
+		{
+			Widget->OnMatchEndBlack.RemoveAll(this);
+			Widget->OnMatchEndBlack.AddUObject(this, &ADungeonPlayerController::HandleMatchEndBlack);
+			// 암전만 (문구/버튼 없음). 완전히 검어진 순간 OnMatchEndBlack -> 로비 이동, 이후로도 검은 화면 유지
+			// (서버 주소로 이동할 땐 접속이 끝날 때까지 GameLV가 계속 돌아가므로, 다시 열리면 안 됨)
+			Widget->StartFadeToBlackOnly();
+		}
+		else
+		{
+			TravelToLobbyForResult(); // 위젯이 없으면 연출 없이 바로 이동
+		}
+		return;
+	}
+
+	// ---- 로비 주소가 없을 때(PIE 테스트 등): 예전처럼 GameLV 안의 결과 방에서 엔딩 ----
 	AResultRoomActor* Room = AResultRoomActor::FindRoom(this, RoomType);
 	ActiveResultRoom = Room;
 	if (!Room)
@@ -575,6 +638,13 @@ void ADungeonPlayerController::ShowHostLeftResult()
 
 void ADungeonPlayerController::HandleMatchEndBlack()
 {
+	// [로비 엔딩] 화면이 완전히 검은 지금 로비로 이동 (결과 방은 로비에서)
+	if (bTravelToLobbyOnMatchEndBlack)
+	{
+		TravelToLobbyForResult();
+		return;
+	}
+
 	AResultRoomActor* Room = ActiveResultRoom.Get();
 	if (!Room)
 	{
@@ -651,24 +721,19 @@ void ADungeonPlayerController::ReturnToLobby()
 		return;
 	}
 
-	// 매치로 넘어오기 직전에 AStartScreenController::Client_ConnectToMatch가 GameInstance 메모장에 적어둔
-	// 로비 주소를 우선 사용. 메모가 없으면(로비를 거치지 않고 PIE로 바로 매치 맵을 실행한 경우 등)
-	// 컨트롤러 BP의 LobbyServerAddress(예비값)를 씀
-	FString LobbyAddress = LobbyServerAddress;
-	if (LobbyAddress.IsEmpty())
-	{
-		LobbyAddress = UEscapeRoomSessionSubsystem::GetConfiguredLobbyAddress(); // [AWS] 설정 파일의 로비 주소
-	}
+	const FString LobbyAddress = ResolveLobbyAddress();
 	if (UGameInstance* GI = GetGameInstance())
 	{
 		if (UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
 		{
-			if (Session->HasLobbyAddress())
-			{
-				LobbyAddress = Session->GetLobbyAddress();
-			}
 			// 스스로 나가는 것이므로 이후 연결 끊김은 "술래 이탈"로 보지 않음
 			Session->EndMatch();
+
+			// [로비 엔딩] GameLV 안에서 이미 결과 방을 본 경우(로비 주소 없는 PIE 등)엔 로비에서 엔딩을 또 틀지 않게 비움
+			if (bShowingResultRoom)
+			{
+				Session->ClearPendingMatchResult();
+			}
 		}
 	}
 
@@ -679,6 +744,53 @@ void ADungeonPlayerController::ReturnToLobby()
 	//        술래(호스트): 내가 나가면 리슨서버가 닫혀서 아직 엔딩을 보던 러너도 로비로 돌아감 (엔딩을 이미 받았으니 조용히 복귀)
 	RestoreLocallyHiddenSpectateMesh();
 	ClientTravel(LobbyAddress, TRAVEL_Absolute);
+}
+
+FString ADungeonPlayerController::ResolveLobbyAddress() const
+{
+	// 매치로 넘어오기 직전에 AStartScreenController가 GameInstance 메모장에 적어둔 로비 주소를 우선 사용.
+	// 메모가 없으면(로비를 거치지 않고 PIE로 바로 매치 맵을 실행한 경우 등) 설정 파일 -> BP 예비값 순
+	if (const UGameInstance* GI = GetGameInstance())
+	{
+		if (const UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
+		{
+			if (Session->HasLobbyAddress())
+			{
+				return Session->GetLobbyAddress();
+			}
+		}
+	}
+
+	FString LobbyAddress = LobbyServerAddress;
+	if (LobbyAddress.IsEmpty())
+	{
+		LobbyAddress = UEscapeRoomSessionSubsystem::GetConfiguredLobbyAddress(); // [AWS] 설정 파일의 로비 주소
+	}
+	return LobbyAddress;
+}
+
+void ADungeonPlayerController::TravelToLobbyForResult()
+{
+	if (!IsLocalController() || PendingLobbyTravelAddress.IsEmpty())
+	{
+		return;
+	}
+	bTravelToLobbyOnMatchEndBlack = false; // 중복 이동 방지
+
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		if (UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
+		{
+			// 스스로 나가는 것이므로 이후 연결 끊김은 신경 안 씀 (결과는 ClientShowMatchEnd에서 이미 저장됨)
+			Session->EndMatch();
+		}
+	}
+
+	GetWorldTimerManager().ClearTimer(LocalSpectateVisualTimer);
+	RestoreLocallyHiddenSpectateMesh();
+
+	UE_LOG(LogTemp, Log, TEXT("[MatchEnd] Traveling to lobby for result ending: %s"), *PendingLobbyTravelAddress);
+	ClientTravel(PendingLobbyTravelAddress, TRAVEL_Absolute);
 }
 
 void ADungeonPlayerController::HandleEscapeFadeOutFinished()

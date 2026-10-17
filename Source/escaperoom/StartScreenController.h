@@ -13,6 +13,8 @@ class UStartScreenWidget;
 class UCreateJoinRoomWidget;
 class URoomWidget;
 class UUserWidget;
+class UEscapeFadeWidget;
+class AResultRoomActor;
 
 /**
  * 
@@ -35,6 +37,13 @@ class ESCAPEROOM_API AStartScreenController : public APlayerController
 	UUserWidget* ActiveWidget;
 
 	virtual void BeginPlay() override;
+
+	// 클라: 내 화면(LocalPlayer)이 연결되는 순간 - BeginPlay보다 늦으면 여기서 로비 UI 초기화
+	virtual void ReceivedPlayer() override;
+
+	// 시작 화면/자동 접속/엔딩 등 로컬 초기화 (BeginPlay 또는 ReceivedPlayer에서 1회)
+	void InitLocalLobby();
+	bool bLocalLobbyInitialized = false;
 
 	void SwitchToWidget(TSubclassOf<UUserWidget> WidgetClass);
 
@@ -70,8 +79,7 @@ public:
 	UFUNCTION(Client, Reliable)
 	void Client_HostMatch(int32 Port, int32 ExpectedPlayers);
 
-	// 매치 레벨 이름 (OpenLevel에 그대로 넘김).
-	// 술래 이탈 시 러너 승리 연출도 이 맵을 혼자 모드(?HostLeftResult)로 다시 열어서 기존 결과 방/엔딩 UI를 씀
+	// 매치 레벨 이름 (OpenLevel에 그대로 넘김)
 	UPROPERTY(EditDefaultsOnly, Category = "Match")
 	FName MatchLevelName = TEXT("GameLV");
 
@@ -95,9 +103,41 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Lobby|Sound", meta = (ClampMin = "0.0"))
 	float LobbyBGMFadeInTime = 1.5f;
 
+	// ===================== [로비 엔딩] 게임 결과 방 연출 =====================
+	// 판이 끝나면 결과가 GameInstance(UEscapeRoomSessionSubsystem)에 저장된 채로 로비로 돌아옴 ->
+	// 시작 화면 대신 LovyLv에 배치된 결과 방(AResultRoomActor)으로 엔딩을 재생하고, 버튼을 누르면 시작 화면으로.
+	// 술래 PC(리슨서버)가 먼저 꺼져도 각자 자기 PC에서 재생하므로 엔딩이 끊기지 않음
+
+	// 엔딩 화면 위젯 (매치에서 쓰던 WBP_EscapeFade 그대로 지정하면 됨 - BP Class Defaults)
+	UPROPERTY(EditDefaultsOnly, Category = "Lobby|Result")
+	TSubclassOf<UEscapeFadeWidget> ResultFadeWidgetClass;
+
+	// 술래가 매치 도중 나가서 러너가 이겼을 때 결과 문구 (결과 방 제목은 RunnerWin 방의 ResultTitle)
+	UPROPERTY(EditDefaultsOnly, Category = "Lobby|Result")
+	FText HostLeftResultMessage = NSLOCTEXT("MatchEnd", "HostLeft", "The chaser left the game");
+
+	// 엔딩 위젯의 버튼이 호출 - 결과 지우고 시작 화면 + 로비 BGM
+	void FinishMatchResult();
+
+	// 결과 방 연출 중 엔진이 시점을 다른 곳(로비 기본 카메라/폰)으로 옮겨도 결과 방으로 되돌림
+	virtual void Tick(float DeltaSeconds) override;
+	virtual void AutoManageActiveCameraTarget(AActor* SuggestedTarget) override;
+
 private:
 	UPROPERTY()
 	TObjectPtr<UAudioComponent> LobbyBGMComponent;
+
+	// 저장된 결과가 있으면 엔딩 시작 후 true (없으면 false -> 평소처럼 시작 화면)
+	bool ShowPendingMatchResult();
+
+	// 엔딩 위젯이 검은 화면이 된 순간 - 내 캐릭터 외형 적용 + 결과 방 카메라로 전환
+	void HandleResultFadeBlack();
+
+	UPROPERTY()
+	TObjectPtr<UEscapeFadeWidget> ResultFadeWidget;
+
+	TWeakObjectPtr<AResultRoomActor> ActiveResultRoom;
+	bool bShowingResultRoom = false;
 
 	// 매치로 떠나기 직전에 지금 접속해 있는 로비 주소를 서브시스템에 저장 (러너/술래 공통)
 	void RememberCurrentLobbyAddress();

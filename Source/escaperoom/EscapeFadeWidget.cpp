@@ -8,6 +8,7 @@
 #include "GameFramework/PlayerState.h"
 #include "GameFramework/Pawn.h"
 #include "DungeonPlayerController.h"
+#include "StartScreenController.h"
 
 void UEscapeFadeWidget::NativeConstruct()
 {
@@ -90,7 +91,7 @@ void UEscapeFadeWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 
-	if (Phase == EPhase::Idle || Phase == EPhase::MatchEnd)
+	if (Phase == EPhase::Idle || Phase == EPhase::MatchEnd || Phase == EPhase::FinalBlack)
 	{
 		return;
 	}
@@ -171,6 +172,15 @@ void UEscapeFadeWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 
 void UEscapeFadeWidget::HandleMatchEndBlack()
 {
+	// [로비 엔딩] 암전 전용 모드: 검은 화면에서 멈추고 알림만 (컨트롤러가 이 순간 로비로 이동)
+	if (bFadeToBlackOnly)
+	{
+		Phase = EPhase::FinalBlack;
+		PhaseTime = 0.f;
+		OnMatchEndBlack.Broadcast();
+		return;
+	}
+
 	if (!bRevealResultRoom)
 	{
 		ShowMatchEndInfo();
@@ -254,6 +264,52 @@ void UEscapeFadeWidget::HandleReturnToLobbyClicked()
 	{
 		PC->ReturnToLobby();
 	}
+	else if (AStartScreenController* LobbyPC = Cast<AStartScreenController>(GetOwningPlayer()))
+	{
+		// [로비 엔딩] 이미 로비에 있음 -> 결과 화면만 닫고 시작 화면으로
+		LobbyPC->FinishMatchResult();
+	}
+}
+
+void UEscapeFadeWidget::SnapToBlack()
+{
+	SetRadius(0.f);
+}
+
+void UEscapeFadeWidget::StartFadeToBlackOnly()
+{
+	if (bFadeToBlackOnly)
+	{
+		return; // 이미 진행 중
+	}
+	bMatchEndMode = true;       // 이후 탈출 연출(StartEscapeFade)이 덮어쓰지 않게
+	bFadeToBlackOnly = true;
+	bRevealResultRoom = false;
+
+	// 화면에는 암전만 보이도록 문구/버튼 전부 숨김 (탈출 문구, 관전 대상, 결과 문구/타이틀, 로비 버튼)
+	SetEscapeInfoVisible(false);
+	SetLobbyButtonVisible(false);
+	if (ResultText)
+	{
+		ResultText->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	if (ResultTitleText)
+	{
+		ResultTitleText->SetVisibility(ESlateVisibility::Collapsed);
+	}
+
+	if (CurrentRadius <= KINDA_SMALL_NUMBER)
+	{
+		// 이미 검은 화면(탈출 암전 도중 등) - 바로 종료 단계
+		SetRadius(0.f);
+		HandleMatchEndBlack();
+		return;
+	}
+
+	// 지금 반경(평소 1, 관전 중이면 SpectateRadius)에서 0까지 암전 - 완전히 검어지면 HandleMatchEndBlack
+	FadeOutStartRadius = CurrentRadius;
+	Phase = EPhase::FadeOut;
+	PhaseTime = 0.f;
 }
 
 void UEscapeFadeWidget::SetRadius(float Radius)
