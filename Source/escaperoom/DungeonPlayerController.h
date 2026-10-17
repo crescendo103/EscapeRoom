@@ -113,8 +113,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Debug|MatchEnd")
 	bool bDebugForceRunnerWinResult = false;
 
+	// {2}(전체 러너 수)는 엔딩 화면에 안 띄우기로 해서 형식에서 뺌 - 인자는 그대로 넘어오지만 안 쓰이면 무시됨
 	UPROPERTY(EditDefaultsOnly, Category = "Escape|UI")
-	FText MatchResultFormat = NSLOCTEXT("MatchEnd", "Result", "Escaped {0}  :  Caught {1}  :  Total {2}");
+	FText MatchResultFormat = NSLOCTEXT("MatchEnd", "Result", "Escaped {0}  :  Caught {1}");
 
 	// [리슨] 술래(호스트)가 매치 도중 나갔을 때 결과 문구 (결과 방 제목은 RunnerWin 방의 ResultTitle 그대로)
 	UPROPERTY(EditDefaultsOnly, Category = "Escape|UI")
