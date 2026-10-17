@@ -26,6 +26,7 @@
 #include "EscapeRoomSessionSubsystem.generated.h"
 
 class UNetDriver;
+class SWidget;
 class USkeletalMesh;
 class UMaterialInterface;
 enum class EMatchResultRoomType : uint8; // ResultRoomActor.h
@@ -114,6 +115,16 @@ public:
 	// 로비에서 엔딩을 다 보고 Exit Game을 눌렀을 때 (또는 새 매치 시작 시) 비움
 	void ClearPendingMatchResult();
 
+	// ---------------- 맵 이동용 검은 막 ----------------
+	// 판이 끝나 로비로 이동할 때, 로비 맵이 로드된 직후 ~ 로비 컨트롤러가 엔딩 위젯을 띄우기 전까지
+	// 로비 화면(시작 화면 카메라)이 몇 프레임 비치는 걸 막는 화면 전체 검은 막.
+	// UMG가 아니라 Slate 위젯을 GameViewportClient에 직접 붙이므로 컨트롤러 없이도 표시되고,
+	// 맵 로드 때 엔진이 뷰포트 위젯을 지워도 PostLoadMapWithWorld에서 즉시 다시 붙여서 맵 이동 내내 유지됨.
+	// 걷는 쪽은 로비 컨트롤러(AStartScreenController: 엔딩 위젯 준비 직후 / 시작 화면 표시 시).
+	void ShowTravelBlackout();
+	void HideTravelBlackout();
+	bool IsTravelBlackoutActive() const { return bBlackoutRequested; }
+
 	// 시작 맵에서 한 번 꺼내 쓰고 비움
 	EMatchDisconnectResult ConsumeDisconnectResult()
 	{
@@ -144,6 +155,21 @@ private:
 
 	FDelegateHandle NetworkFailureHandle;
 	FDelegateHandle TravelFailureHandle;
+	FDelegateHandle PostLoadMapHandle;
+
+	// ---- 맵 이동용 검은 막 ----
+	TSharedPtr<SWidget> BlackoutWidget;
+	bool bBlackoutRequested = false;
+	FTimerHandle BlackoutSafetyTimer;
+
+	// 컨트롤러가 끝내 걷지 못하는 경우(접속 실패 등) 이 시간이 지나면 자동으로 걷음
+	static constexpr float BlackoutMaxSeconds = 30.f;
+
+	void AddBlackoutToViewport();
+	void RemoveBlackoutFromViewport();
+
+	// 맵 로드 완료(새 맵 첫 프레임 전) - 막이 요청된 상태면 다시 붙임
+	void HandlePostLoadMap(UWorld* LoadedWorld);
 
 	// 접속 중이던 서버(술래 PC)와 연결이 끊김
 	void HandleNetworkFailure(UWorld* World, UNetDriver* NetDriver, ENetworkFailure::Type FailureType, const FString& ErrorString);

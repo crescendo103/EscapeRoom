@@ -783,6 +783,9 @@ void ADungeonPlayerController::TravelToLobbyForResult()
 		{
 			// 스스로 나가는 것이므로 이후 연결 끊김은 신경 안 씀 (결과는 ClientShowMatchEnd에서 이미 저장됨)
 			Session->EndMatch();
+
+			// 로비 맵이 로드된 직후 ~ 엔딩 위젯이 뜨기 전까지 로비 화면이 비치지 않게 검은 막 (로비 컨트롤러가 걷음)
+			Session->ShowTravelBlackout();
 		}
 	}
 

@@ -8,6 +8,11 @@
 #include "Engine/SkeletalMesh.h"
 #include "Materials/MaterialInterface.h"
 #include "ResultRoomActor.h"
+#include "Engine/GameViewportClient.h"
+#include "Widgets/Layout/SBorder.h"
+#include "Styling/CoreStyle.h"
+#include "UObject/UObjectGlobals.h"
+#include "TimerManager.h"
 
 void UEscapeRoomSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -18,6 +23,8 @@ void UEscapeRoomSessionSubsystem::Initialize(FSubsystemCollectionBase& Collectio
 		NetworkFailureHandle = GEngine->OnNetworkFailure().AddUObject(this, &UEscapeRoomSessionSubsystem::HandleNetworkFailure);
 		TravelFailureHandle = GEngine->OnTravelFailure().AddUObject(this, &UEscapeRoomSessionSubsystem::HandleTravelFailure);
 	}
+
+	PostLoadMapHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(this, &UEscapeRoomSessionSubsystem::HandlePostLoadMap);
 }
 
 void UEscapeRoomSessionSubsystem::Deinitialize()
@@ -27,6 +34,12 @@ void UEscapeRoomSessionSubsystem::Deinitialize()
 		GEngine->OnNetworkFailure().Remove(NetworkFailureHandle);
 		GEngine->OnTravelFailure().Remove(TravelFailureHandle);
 	}
+	FCoreUObjectDelegates::PostLoadMapWithWorld.Remove(PostLoadMapHandle);
+
+	bBlackoutRequested = false;
+	RemoveBlackoutFromViewport();
+	BlackoutWidget.Reset();
+
 	Super::Deinitialize();
 }
 
@@ -102,6 +115,9 @@ void UEscapeRoomSessionSubsystem::HandleNetworkFailure(UWorld* World, UNetDriver
 	PendingDisconnectResult = EMatchDisconnectResult::ReturnToLobby;
 	bInMatch = false;
 
+	// 이제 혼자 모드 로비 맵 -> 로비 서버 재접속을 거쳐 로비에서 엔딩을 보게 됨 - 그동안 로비 화면이 비치지 않게 검은 막
+	ShowTravelBlackout();
+
 	UE_LOG(LogTemp, Warning, TEXT("[Session] Lost connection to match host (%s: %s) -> %s"),
 		ENetworkFailure::ToString(FailureType), *ErrorString,
 		bMatchResultReceived ? TEXT("return to lobby") : TEXT("HOST LEFT - runners win"));
@@ -121,4 +137,79 @@ void UEscapeRoomSessionSubsystem::HandleTravelFailure(UWorld* World, ETravelFail
 
 	UE_LOG(LogTemp, Warning, TEXT("[Session] Could not join match host (%s: %s) -> return to lobby"),
 		ETravelFailure::ToString(FailureType), *ErrorString);
+}
+
+// =========================== 맵 이동용 검은 막 ===========================
+
+void UEscapeRoomSessionSubsystem::ShowTravelBlackout()
+{
+	bBlackoutRequested = true;
+	AddBlackoutToViewport();
+
+	// 안전장치: 누가 끝내 걷지 않아도 일정 시간 뒤 자동으로 걷음 (GameInstance 타이머 - 맵이 바뀌어도 유지)
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		GI->GetTimerManager().SetTimer(BlackoutSafetyTimer,
+			FTimerDelegate::CreateUObject(this, &UEscapeRoomSessionSubsystem::HideTravelBlackout),
+			BlackoutMaxSeconds, false);
+	}
+	UE_LOG(LogTemp, Log, TEXT("[Session] Travel blackout ON"));
+}
+
+void UEscapeRoomSessionSubsystem::HideTravelBlackout()
+{
+	if (!bBlackoutRequested && !BlackoutWidget.IsValid())
+	{
+		return;
+	}
+	bBlackoutRequested = false;
+	RemoveBlackoutFromViewport();
+
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		GI->GetTimerManager().ClearTimer(BlackoutSafetyTimer);
+	}
+	UE_LOG(LogTemp, Log, TEXT("[Session] Travel blackout OFF"));
+}
+
+void UEscapeRoomSessionSubsystem::AddBlackoutToViewport()
+{
+	UGameInstance* GI = GetGameInstance();
+	UGameViewportClient* VC = GI ? GI->GetGameViewportClient() : nullptr; // 내 창 (PIE면 창마다 따로)
+	if (!VC)
+	{
+		return; // 데디서버 등 화면 없음
+	}
+
+	if (!BlackoutWidget.IsValid())
+	{
+		// 화면 전체를 채우는 검은 사각형 (Slate - PlayerController 없이도 표시 가능)
+		BlackoutWidget = SNew(SBorder)
+			.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+			.BorderBackgroundColor(FLinearColor::Black)
+			.Visibility(EVisibility::HitTestInvisible);
+	}
+
+	// 이미 붙어있으면 중복으로 쌓이지 않게 한 번 떼고 다시 붙임. ZOrder를 크게 줘서 모든 UI보다 위
+	VC->RemoveViewportWidgetContent(BlackoutWidget.ToSharedRef());
+	VC->AddViewportWidgetContent(BlackoutWidget.ToSharedRef(), 10000);
+}
+
+void UEscapeRoomSessionSubsystem::RemoveBlackoutFromViewport()
+{
+	UGameInstance* GI = GetGameInstance();
+	UGameViewportClient* VC = GI ? GI->GetGameViewportClient() : nullptr;
+	if (VC && BlackoutWidget.IsValid())
+	{
+		VC->RemoveViewportWidgetContent(BlackoutWidget.ToSharedRef());
+	}
+}
+
+void UEscapeRoomSessionSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
+{
+	// 맵 로드 때 엔진이 뷰포트 위젯을 정리하므로, 막이 요청된 상태면 새 맵 첫 프레임 전에 다시 붙임
+	if (bBlackoutRequested && IsMyWorld(LoadedWorld))
+	{
+		AddBlackoutToViewport();
+	}
 }

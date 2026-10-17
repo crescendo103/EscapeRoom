@@ -146,6 +146,12 @@ void AStartScreenController::SwitchToWidget(TSubclassOf<UUserWidget> WidgetClass
 void AStartScreenController::ShowStartScreenWidget()
 {
 	SwitchToWidget(StartScreenWidgetClass);
+
+	// 맵 이동용 검은 막이 남아있으면 걷음 (엔딩 없이 시작 화면으로 온 경우 등 - 검은 화면에 갇히지 않게)
+	if (UEscapeRoomSessionSubsystem* Session = GetGameInstance() ? GetGameInstance()->GetSubsystem<UEscapeRoomSessionSubsystem>() : nullptr)
+	{
+		Session->HideTravelBlackout();
+	}
 }
 
 void AStartScreenController::ShowCreateJoinRoomWidget()
@@ -419,6 +425,9 @@ bool AStartScreenController::ShowPendingMatchResult()
 
 	// 로비 풍경이 비치지 않게 완전히 검은 화면에서 시작 -> 결과 방 공개 (매치에서 하던 연출과 동일한 흐름)
 	ResultFadeWidget->SnapToBlack();
+
+	// 엔딩 위젯이 검은 화면으로 준비됨 = 컨트롤러 준비 완료 -> 맵 이동용 검은 막 제거 (아래가 이미 검어서 티 안 남)
+	Session->HideTravelBlackout();
 	ResultFadeWidget->OnMatchEndBlack.AddUObject(this, &AStartScreenController::HandleResultFadeBlack);
 
 	// 버튼이 뜨기 전까지는 클릭/키 입력 무시 (버튼이 뜨면 위젯이 GameAndUI + 커서로 바꿔줌)
