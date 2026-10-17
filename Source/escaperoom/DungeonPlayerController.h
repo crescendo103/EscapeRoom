@@ -159,6 +159,10 @@ protected:
 	virtual void AcknowledgePossession(APawn* P) override;
 	virtual void SetupInputComponent() override;
 
+	// [리슨] 서버에서 이 플레이어가 나갈 때(접속 끊김) 엔진이 호출 -> 기본 동작은 조종 중인 폰을 Destroy.
+	// 캐비넷에 숨은 채로 나가면 캐비넷이 지워지는 걸 막기 위해, 먼저 도망자에게 조종권을 돌려놓고 Super 호출
+	virtual void PawnLeavingGame() override;
+
 private:
 	UPROPERTY()
 	ULoadingScreenWidget* LoadingWidget;

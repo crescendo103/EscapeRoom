@@ -126,6 +126,11 @@ public:
     UFUNCTION(BlueprintPure, Category = "Cabinet")
     bool IsBeingOpened() const { return bIsBeingOpened; }
 
+    // [리슨] 숨어있던 도망자가 게임을 나갈 때 서버에서 호출 (ADungeonPlayerController::PawnLeavingGame).
+    // 엔진은 나가는 플레이어가 "조종 중인 폰"을 지우는데, 숨는 동안엔 그게 이 캐비넷이라 캐비넷이 통째로 사라지고
+    // 투명한 도망자 몸만 남았음 -> 먼저 조종권을 도망자에게 돌려줘서, 지워지는 대상이 도망자 캐릭터가 되게 함
+    void ReleaseOccupantForLeavingPlayer(APlayerController* LeavingPC);
+
     // 나가기 홀드 진행률(0~1). ExitHoldTimerHandle이 활성 상태일 때만 0보다 큼 - ARunnerCharacter::
     // GetInteractHoldPercent()와 완전히 동일한 패턴. 숨어있는 동안은 이 캐비넷 자체가 조종되는 폰이라
     // MatchWidget이 이 값을 읽어서 나가기 게이지를 갱신함

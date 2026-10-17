@@ -221,6 +221,26 @@ void ACabinetActor::StartHiding(ARunnerCharacter* Runner)
     OnRep_OccupyingRunner();
 }
 
+void ACabinetActor::ReleaseOccupantForLeavingPlayer(APlayerController* LeavingPC)
+{
+    if (!HasAuthority() || !OccupyingRunner) return;
+
+    ARunnerCharacter* Runner = OccupyingRunner;
+
+    // 숨김 해제 + 조종권을 도망자에게 (캐비넷은 빈 상태로 맵에 남음)
+    ReturnControlToRunner(false);
+
+    // 혹시 Possess가 안 돼서 아직 캐비넷을 조종 중이면: 캐비넷은 놔두고 도망자 캐릭터만 직접 정리
+    if (LeavingPC && LeavingPC->GetPawn() == this)
+    {
+        LeavingPC->UnPossess();
+        if (IsValid(Runner))
+        {
+            Runner->Destroy();
+        }
+    }
+}
+
 void ACabinetActor::ReturnControlToRunner(bool bRestoreOriginalPosition)
 {
     if (!HasAuthority() || !OccupyingRunner) return;

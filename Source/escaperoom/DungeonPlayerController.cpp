@@ -280,6 +280,18 @@ void ADungeonPlayerController::AcknowledgePossession(APawn* P)
 	}
 }
 
+void ADungeonPlayerController::PawnLeavingGame()
+{
+	// 숨어있던 도망자: 캐비넷 대신 도망자 캐릭터가 지워지도록 조종권부터 되돌림
+	if (ACabinetActor* Cabinet = Cast<ACabinetActor>(GetPawn()))
+	{
+		Cabinet->ReleaseOccupantForLeavingPlayer(this);
+	}
+
+	// 엔진 기본: 지금 조종 중인 폰(= 도망자 캐릭터)을 Destroy
+	Super::PawnLeavingGame();
+}
+
 // =========================== 배경음악 ===========================
 
 void ADungeonPlayerController::Tick(float DeltaSeconds)

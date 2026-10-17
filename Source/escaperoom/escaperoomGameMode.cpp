@@ -355,6 +355,30 @@ void AescaperoomGameMode::Logout(AController* Exiting)
 {
 	PendingStartPlayers.Remove(TWeakObjectPtr<AController>(Exiting));
 
+	// [리슨] 판 도중 나간 러너 처리: 아직 진행 중(안 잡힘 + 탈출 안 함)이던 러너였으면 남은 러너 수에서 뺀다.
+	// 안 빼면 RemainingRunnerCount가 0이 안 돼서, 나머지 러너가 다 잡히거나 탈출해도 제한시간까지 판이 안 끝남.
+	// Logout 시점엔 폰은 이미 지워졌을 수 있지만 PlayerState는 아직 살아있음(Super/엔진 정리 이후 삭제) -> PlayerState로 판단.
+	// 매치 시작 전(로딩 중)엔 역할이 아직 Unassigned라서, 호스트(술래 = 로컬 컨트롤러)가 아니면 러너로 취급
+	if (!bMatchEnded && Exiting)
+	{
+		const AMatchPlayerState* MPS = Exiting->GetPlayerState<AMatchPlayerState>();
+		const bool bRunner = MPS && (MPS->IsRunner()
+			|| (MPS->GetMatchRole() == EMatchPlayerRole::Unassigned && !Exiting->IsLocalController()));
+
+		if (bRunner && !MPS->IsInJail() && !MPS->HasEscaped())
+		{
+			if (AEscapeRoomGameState* GS = GetGameState<AEscapeRoomGameState>())
+			{
+				UE_LOG(LogTemp, Log, TEXT("[Match] Runner '%s' left mid-match -> remaining runners %d -> %d"),
+					*MPS->GetPlayerName(), GS->RemainingRunnerCount, FMath::Max(GS->RemainingRunnerCount - 1, 0));
+
+				// 마지막 남은 러너였으면 여기서 바로 OnAllRunnersResolved -> HandleAllRunnersResolved(게임 종료)까지 이어짐.
+				// 나간 사람은 결과 집계에서 "탈출 못 한 러너"로 계산됨
+				GS->NotifyRunnerResolved();
+			}
+		}
+	}
+
 	Super::Logout(Exiting);
 
 	// [리슨] 술래 PC(리슨서버)에서 러너가 나간 경우 - 호스트는 남아있으니 아무것도 안 함.
