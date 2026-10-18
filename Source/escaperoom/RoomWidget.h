@@ -83,6 +83,12 @@ protected:
 
 	void RefreshRoomInfo();
 
+	// 매치 시작 최소 인원 - LobbyGameMode::CheckRoomReadyState의 bEnough(>= 2)와 맞춰야 함
+	static constexpr int32 MinPlayersToReady = 2;
+
+	// 인원이 모자라면 Ready 버튼 비활성화 (이미 Ready인 상태면 해제는 할 수 있게 활성 유지)
+	bool CanPressReady(const struct FRoomInfo& Room, bool bSelfReady) const;
+
 	// bMatchStarted에 맞춰 로딩 패널 표시/숨김 + Ready/나가기 버튼 잠금
 	void UpdateLoadingState(bool bLoading);
 	bool IsMatchLoading() const;

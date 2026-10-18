@@ -59,7 +59,24 @@ void URoomWidget::RefreshRoomInfo()
 
 		// 서버가 매치 서버를 띄우기 시작하면 true (실패하면 서버가 다시 false로 돌려서 패널도 꺼짐)
 		UpdateLoadingState(Room->bMatchStarted);
+
+		// UpdateLoadingState가 로딩 기준으로 켠 Ready 버튼을 인원 기준으로 한 번 더 판정
+		if (ReadyButton)
+		{
+			ReadyButton->SetIsEnabled(CanPressReady(*Room, EP->bIsReady));
+		}
 	}
+}
+
+bool URoomWidget::CanPressReady(const FRoomInfo& Room, bool bSelfReady) const
+{
+	if (Room.bMatchStarted)
+	{
+		return false; // 로딩 중
+	}
+
+	// 혼자면 Ready 불가. 단 이미 Ready인 상태로 상대가 나갔다면 해제는 가능해야 하므로 활성
+	return Room.Members.Num() >= MinPlayersToReady || bSelfReady;
 }
 
 void URoomWidget::UpdateLoadingState(bool bLoading)
@@ -167,6 +184,11 @@ void URoomWidget::RequestToggleReady()
 	auto* EP = PC ? PC->GetPlayerState<AEscapeRoomPlayerState>() : nullptr;
 	if (!SSC || !EP) return;
 	if (IsMatchLoading()) return; // 버튼 애니메이션 Delay 중에 로딩이 시작된 경우
+
+	// 버튼 애니메이션 Delay 중에 상대가 나가서 혼자가 된 경우 (Ready 해제는 허용)
+	auto* GS = GetWorld() ? GetWorld()->GetGameState<AEscapeRoomGameState>() : nullptr;
+	const FRoomInfo* Room = GS ? GS->FindRoom(EP->CurrentRoomId) : nullptr;
+	if (!Room || !CanPressReady(*Room, EP->bIsReady)) return;
 
 	SSC->Server_SetReady(!EP->bIsReady);
 }

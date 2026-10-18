@@ -528,7 +528,10 @@ void ADungeonPlayerController::ClientShowMatchEnd_Implementation(int32 EscapedCo
 	SetIgnoreLookInput(true);
 
 	// 진행 중이던 홀드 게이지 등 HUD는 가려지므로 따로 정리하지 않음
-	const FText Result = FText::Format(MatchResultFormat, FText::AsNumber(EscapedCount), FText::AsNumber(CaughtCount), FText::AsNumber(TotalRunners));
+	// 통계(탈출/잡힘 수)는 술래 화면에만 표시, 러너 엔딩 UI는 빈칸 (게임 맵 엔딩/로비 엔딩 공통)
+	const FText Result = bIsChaser
+		? FText::Format(MatchResultFormat, FText::AsNumber(EscapedCount), FText::AsNumber(CaughtCount), FText::AsNumber(TotalRunners))
+		: FText::GetEmpty();
 
 	// ---- 내 승패 -> 결과 방 선택 ----
 	// 승패는 서버(AescaperoomGameMode::HandleAllRunnersResolved)가 판정해서 보내준 값 사용

@@ -33,6 +33,15 @@ enum class EMatchResultRoomType : uint8
 	ChaserLose
 };
 
+// 바닥 스크롤(러닝머신 연출)에 쓸 축 - Root 기준 상대 좌표
+UENUM(BlueprintType)
+enum class EResultScrollAxis : uint8
+{
+	X,
+	Y,
+	Z
+};
+
 // 결과 방에서 재생할 애니 + 그 캐릭터용 위치 보정값 한 묶음.
 // 메시를 교체하면 그 메시와 같은 스켈레톤의 Animation을 가진 항목을 골라, 애니 재생 + 오프셋 적용.
 // 오프셋은 BP에 놓은 CharacterMesh 위치(= 기본 캐릭터 기준)에 더해지므로 기본 캐릭터 항목은 0으로 두면 됨
@@ -93,8 +102,44 @@ public:
 
 	UCameraComponent* GetResultCamera() const { return ResultCamera; }
 
+	// ---- 바닥 스크롤 (캐릭터는 제자리 걷기, 바닥/소품이 대신 흘러감) ----
+	// ScrollTag가 붙은 컴포넌트들이 BackPosition -> FrontPosition 방향으로 이동하다가,
+	// FrontPosition에 도달하면 (Front - Back) 거리만큼 되돌아감 (= BackPosition부터 다시 출발).
+	// 판자를 여러 장 쓸 때는 Front - Back = 판자 길이 x 장수 로 맞추면 틈 없이 이어짐
+
+	// 켜면 Tick이 돌면서 스크롤. 끄면 Tick 자체가 꺼짐
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ResultRoom|Scroll")
+	bool bEnableScroll = false;
+
+	// 이 태그(컴포넌트 디테일 > Tags)가 붙은 컴포넌트만 움직임. 자식 컴포넌트는 부모 따라 같이 움직이므로
+	// 부모/자식 둘 다 태그를 달면 두 배로 움직임 - 부모에만 달 것
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ResultRoom|Scroll", meta = (EditCondition = "bEnableScroll"))
+	FName ScrollTag = TEXT("Scroll");
+
+	// 이동 축 (Root 기준 상대 좌표)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ResultRoom|Scroll", meta = (EditCondition = "bEnableScroll"))
+	EResultScrollAxis ScrollAxis = EResultScrollAxis::X;
+
+	// 초당 이동 거리(cm). 걷기 애니 속도에 맞출 것.
+	// 양수 = Back -> Front 방향 (Front 도달 시 Back으로), 음수 = Front -> Back 방향 (Back 도달 시 Front로)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ResultRoom|Scroll", meta = (EditCondition = "bEnableScroll"))
+	float ScrollSpeed = 150.f;
+
+	// 되돌아갈 뒷위치 (축 좌표값)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ResultRoom|Scroll", meta = (EditCondition = "bEnableScroll"))
+	float ScrollBackPosition = -1000.f;
+
+	// 여기 도달하면 뒷위치로 (축 좌표값). Back보다 작으면 반대 방향으로 이동
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ResultRoom|Scroll", meta = (EditCondition = "bEnableScroll"))
+	float ScrollFrontPosition = 1000.f;
+
+	// 런타임에 켜고 끄기 (블루프린트에서도 호출 가능)
+	UFUNCTION(BlueprintCallable, Category = "ResultRoom|Scroll")
+	void SetScrollEnabled(bool bEnable);
+
 protected:
 	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ResultRoom")
 	TObjectPtr<USceneComponent> Root;
@@ -109,6 +154,10 @@ protected:
 
 private:
 	void PlayLoopAnimation();
+
+	// ScrollTag가 붙은 컴포넌트 캐시 (BeginPlay에서 수집)
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<USceneComponent>> ScrollComponents;
 
 	// BP에 배치된 CharacterMesh의 원래 상대 트랜스폼 (보정 기준)
 	FTransform DefaultMeshTransform = FTransform::Identity;

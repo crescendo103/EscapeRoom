@@ -10,7 +10,8 @@
 
 AResultRoomActor::AResultRoomActor()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;           // 바닥 스크롤용
+	PrimaryActorTick.bStartWithTickEnabled = false; // 실제 On/Off는 BeginPlay에서 bEnableScroll로 결정
 	bReplicates = false; // 내 화면 전용 연출
 
 #if WITH_EDITORONLY_DATA
@@ -44,6 +45,21 @@ void AResultRoomActor::BeginPlay()
 		CharacterMesh->SetComponentTickEnabled(false);
 		return;
 	}
+
+	// 스크롤 대상 수집 (BP에서 추가한 StaticMesh/Niagara 등 ScrollTag가 붙은 것 전부)
+	ScrollComponents.Reset();
+	TArray<USceneComponent*> SceneComps;
+	GetComponents<USceneComponent>(SceneComps);
+	for (USceneComponent* Comp : SceneComps)
+	{
+		if (Comp && Comp != Root && Comp->ComponentHasTag(ScrollTag))
+		{
+			// 정적(Static) 모빌리티면 이동이 안 되므로 Movable로
+			Comp->SetMobility(EComponentMobility::Movable);
+			ScrollComponents.Add(Comp);
+		}
+	}
+	SetScrollEnabled(bEnableScroll);
 
 	// 기본 메시로 미리 걷게 해둠 (결과 시점에 메시만 바꿔 끼우면 다시 재생)
 	PlayLoopAnimation();
@@ -109,6 +125,59 @@ void AResultRoomActor::PlayLoopAnimation()
 
 	CharacterMesh->SetAnimationMode(EAnimationMode::AnimationSingleNode);
 	CharacterMesh->PlayAnimation(Found->Animation, /*bLooping=*/true);
+}
+
+void AResultRoomActor::SetScrollEnabled(bool bEnable)
+{
+	bEnableScroll = bEnable;
+
+	// 데디 서버는 화면이 없으니 항상 끔
+	SetActorTickEnabled(bEnableScroll && !IsNetMode(NM_DedicatedServer));
+}
+
+void AResultRoomActor::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	const float Range = ScrollFrontPosition - ScrollBackPosition;
+	if (FMath::IsNearlyZero(Range) || FMath::IsNearlyZero(ScrollSpeed) || ScrollComponents.Num() == 0)
+	{
+		return;
+	}
+
+	const float Dir = Range > 0.f ? 1.f : -1.f;
+	const int32 AxisIndex = static_cast<int32>(ScrollAxis);
+
+	for (USceneComponent* Comp : ScrollComponents)
+	{
+		if (!Comp)
+		{
+			continue;
+		}
+
+		FVector Loc = Comp->GetRelativeLocation();
+		Loc[AxisIndex] += Dir * ScrollSpeed * DeltaSeconds;
+
+		// 0으로 리셋하지 않고 Range만큼 이동시켜 "넘은 만큼"을 유지 -> 판자 사이 틈이 안 생김
+		if (ScrollSpeed > 0.f)
+		{
+			// 정방향: Front를 넘으면 Back 쪽으로
+			while ((Loc[AxisIndex] - ScrollFrontPosition) * Dir >= 0.f)
+			{
+				Loc[AxisIndex] -= Range;
+			}
+		}
+		else
+		{
+			// 역방향(음수 속도): Back을 넘으면 Front 쪽으로
+			while ((ScrollBackPosition - Loc[AxisIndex]) * Dir >= 0.f)
+			{
+				Loc[AxisIndex] += Range;
+			}
+		}
+
+		Comp->SetRelativeLocation(Loc);
+	}
 }
 
 AResultRoomActor* AResultRoomActor::FindRoom(const UObject* WorldContext, EMatchResultRoomType Type)

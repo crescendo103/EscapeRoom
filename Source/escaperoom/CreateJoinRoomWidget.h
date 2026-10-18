@@ -74,6 +74,13 @@ protected:
 	UButton* BackButton;
 
 private:
+	// 입력 필터: 방 이름 = 영문만, 최대 인원 = 숫자만
+	UFUNCTION()
+	void OnRoomNameChanged(const FText& Text);
+
+	UFUNCTION()
+	void OnMaxMembersChanged(const FText& Text);
+
 	// GameState->Rooms(리플리케이트된 방 목록)를 폴링해서 RoomListScrollBox를 다시 채움
 	void RefreshRoomList();
 

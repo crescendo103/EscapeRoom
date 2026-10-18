@@ -5,6 +5,7 @@
 #include "Components/Image.h"
 #include "Engine/Texture2D.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "LobbyInputFilter.h"
 
 void UStartScreenWidget::GoToCreateJoinRoom()
 {
@@ -12,7 +13,9 @@ void UStartScreenWidget::GoToCreateJoinRoom()
 	{
 		if (PlayerNameTextBox)
 		{
-			FString Name = PlayerNameTextBox->GetText().ToString();
+			// 붙여넣기 등으로 필터를 우회한 경우 대비해 한 번 더 영문만 남김
+			// 앞뒤 공백 제거 (공백만 입력한 경우 빈 이름 -> 기본값 처리)
+			FString Name = LobbyInputFilter::KeepEnglishOnly(PlayerNameTextBox->GetText().ToString()).TrimStartAndEnd();
 			if (Name.IsEmpty())
 			{
 				Name = TEXT("Player"); // 기본값 (RequestCreateRoom의 "New Room" 패턴과 동일)
@@ -42,6 +45,11 @@ void UStartScreenWidget::NativeConstruct()
 		QuitButton->OnClicked.AddDynamic(this, &UStartScreenWidget::OnQuitClicked);
 	}
 
+	if (PlayerNameTextBox)
+	{
+		PlayerNameTextBox->OnTextChanged.AddDynamic(this, &UStartScreenWidget::OnPlayerNameChanged);
+	}
+
 	// 시작 시 조작법 화면은 닫힌 상태
 	ShowGuidePage(0);
 }
@@ -49,6 +57,11 @@ void UStartScreenWidget::NativeConstruct()
 void UStartScreenWidget::OnHowToClicked()
 {
 	ShowGuidePage(1); // 술래 조작법부터
+}
+
+void UStartScreenWidget::OnPlayerNameChanged(const FText& Text)
+{
+	LobbyInputFilter::Apply(PlayerNameTextBox, Text, &LobbyInputFilter::KeepEnglishOnly);
 }
 
 void UStartScreenWidget::OnQuitClicked()

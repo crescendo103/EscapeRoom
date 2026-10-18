@@ -5,10 +5,20 @@
 #include "StartScreenController.h"
 #include "EscapeRoomGameState.h"
 #include "TimerManager.h"
+#include "LobbyInputFilter.h"
 
 void UCreateJoinRoomWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+
+	if (RoomNameTextBox)
+	{
+		RoomNameTextBox->OnTextChanged.AddDynamic(this, &UCreateJoinRoomWidget::OnRoomNameChanged);
+	}
+	if (MaxMembersTextBox)
+	{
+		MaxMembersTextBox->OnTextChanged.AddDynamic(this, &UCreateJoinRoomWidget::OnMaxMembersChanged);
+	}
 
 	RefreshRoomList();
 
@@ -66,7 +76,9 @@ void UCreateJoinRoomWidget::RequestCreateRoom()
 	AStartScreenController* PC = Cast<AStartScreenController>(GetOwningPlayer());
 	if (!PC) return;
 
-	FString RoomName = RoomNameTextBox ? RoomNameTextBox->GetText().ToString() : FString();
+	// 붙여넣기 등으로 필터를 우회한 경우 대비해 한 번 더 영문만 남김
+	// 앞뒤 공백 제거 (공백만 입력한 경우 빈 이름 -> 기본값 처리)
+	FString RoomName = RoomNameTextBox ? LobbyInputFilter::KeepEnglishOnly(RoomNameTextBox->GetText().ToString()).TrimStartAndEnd() : FString();
 	if (RoomName.IsEmpty())
 	{
 		RoomName = TEXT("New Room");
@@ -85,6 +97,16 @@ void UCreateJoinRoomWidget::RequestCreateRoom()
 	MaxMembers = FMath::Clamp(MaxMembers, 1, 5);
 
 	PC->Server_CreateRoom(RoomName, MaxMembers);
+}
+
+void UCreateJoinRoomWidget::OnRoomNameChanged(const FText& Text)
+{
+	LobbyInputFilter::Apply(RoomNameTextBox, Text, &LobbyInputFilter::KeepEnglishOnly);
+}
+
+void UCreateJoinRoomWidget::OnMaxMembersChanged(const FText& Text)
+{
+	LobbyInputFilter::Apply(MaxMembersTextBox, Text, &LobbyInputFilter::KeepDigitsOnly);
 }
 
 void UCreateJoinRoomWidget::RequestJoinRoomDelayed(int32 RoomId)

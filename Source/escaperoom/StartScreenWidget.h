@@ -51,6 +51,10 @@ protected:
 	UFUNCTION()
 	void OnQuitClicked();
 
+	// 닉네임 입력 필터 (영문만)
+	UFUNCTION()
+	void OnPlayerNameChanged(const FText& Text);
+
 	// ---------- 조작법 보기 ----------
 	// 조작법 버튼: 누르면 술래 조작법 이미지부터 전체 화면으로 표시
 	// 페이지 순서: 술래 조작법 -> 러너 조작법 -> 술래 목표 -> 러너 목표 -> 닫힘 (텍스처가 비어 있는 페이지는 건너뜀)
