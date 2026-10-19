@@ -42,8 +42,7 @@ public:
     UPROPERTY(ReplicatedUsing = OnRep_IsSprinting, BlueprintReadOnly, Category = "State")
     bool bIsSprinting = false;
 
-    UPROPERTY(BlueprintReadOnly, Category = "State")
-    bool bIsInteracting = false;
+    // bIsInteracting은 부모(AescaperoomCharacter)로 이동 (러너/술래 공통)
 
     UPROPERTY(BlueprintReadOnly, Category = "State")
     bool bIsEmoting = false;
@@ -155,8 +154,23 @@ protected:
     void StartCrouch(const FInputActionValue& Value);
     void StopCrouch(const FInputActionValue& Value);
 
-    // 상호작용키를 누른 순간: 대상 탐색 후, 홀드가 필요없으면 즉시 처리 / 필요하면 홀드 타이머 시작
-    void Interact(const FInputActionValue& Value);
+    // ---- 상호작용: 공통 흐름(Interact/홀드/완료/취소/서버 RPC)은 부모(AescaperoomCharacter)에 있음.
+    // 러너 전용 부분만 아래 훅으로 override ----
+
+    // 캐비넷에서 막 나옴 / 상호작용·이모트 중 / 탈출함이면 막음
+    virtual bool CanStartInteract() const override;
+
+    // 디버그 로그 + 탈출구는 이미 쓰였거나 다른 러너가 오르는 중이면 홀드 자체를 시작하지 않음
+    virtual bool ShouldStartInteract(AActor* Target) override;
+
+    // 회전 잠금 + 상호작용 몽타주 요청 (사다리는 서버 승인 뒤 재생되므로 제외)
+    virtual void OnInteractStarted(AActor* Target, float HoldTime) override;
+
+    // 즉시 처리 + 몽타주가 없으면 대체 펄스 타이머
+    virtual void HandleInstantInteract(AActor* Target) override;
+
+    // 사다리 Flying 모드 복구 + 재생 중이던 몽타주 정지
+    virtual void OnHoldInteractCanceled() override;
 
     // 캐비넷에서 나와 다시 빙의된 직후, 나가기에 쓰던 키(E)를 아직 누르고 있으면 Interact가 새로 눌린 것으로
     // 들어와 바로 앞 캐비넷에 다시 숨기 홀드가 걸림 -> 빙의 직후 이 시간(초) 동안은 Interact 입력 무시
@@ -171,24 +185,11 @@ protected:
     // [리슨] 공통 IMC(부모) + 러너 전용 IMC 추가 (BeginPlay에서 옮겨옴 - 술래와 같은 이유)
     virtual void AddLocalInputMappings(UEnhancedInputLocalPlayerSubsystem* Subsystem) override;
 
-    // 상호작용키를 뗀 순간: 홀드 타이머가 아직 진행 중이었다면 취소
-    void CancelHoldInteract(const FInputActionValue& Value);
-
-    // CancelHoldInteract의 실제 취소 로직. Move()에서도(이동 입력이 들어오면 홀드를 취소하기 위해)
-    // 같이 써야 해서 FInputActionValue 없이 부를 수 있도록 분리함
-    void CancelHoldInteractInternal();
-
     // ClimbMontage 재생 중(홀드 미리보기 + 실제 클라이밍) true. CharacterMovementComponent가
     // Walking 모드일 때 매 틱 바닥 높이로 캡슐을 되돌려버려서 AnimNotify_ClimbStep의
     // AddActorWorldOffset이 무효화되는 것을 막기 위해, 이 동안만 Flying 모드로 바꿔둔다.
     // 홀드가 취소되면(사다리를 실제로 타지 않게 되면) 다시 Walking으로 복구해야 하므로 플래그로 추적
     bool bClimbFlightModeActive = false;
-
-    // 홀드 타이머 완료 시 실제로 서버에 상호작용을 요청
-    void CompleteHoldInteract();
-
-    // 몸 정면 박스 안의 IInteractable 중 가장 가까운 액터 (없으면 nullptr). 박스 크기는 Interaction|Box 카테고리
-    AActor* FindInteractableTarget() const;
 
     void EndInteractPulse();
     void OnInteractMontageEnded(UAnimMontage* Montage, bool bInterrupted);
@@ -256,11 +257,6 @@ public:
     // 잡으려는 중복 트리거를 막는 데 사용 (public이어야 다른 클래스에서 재검증 가능)
     UFUNCTION(BlueprintPure, Category = "State")
     bool IsBeingCaught() const { return bIsBeingCaught; }
-
-    // 홀드 상호작용 진행률(0~1). InteractHoldTimerHandle이 활성 상태일 때만 0보다 큼 (MatchWidget이 참고).
-    // 부모(AescaperoomCharacter)에서 이미 UFUNCTION(BlueprintPure)로 선언되어 있어서, 오버라이드에는
-    // UFUNCTION()을 다시 붙이면 안 됨 (UHT 에러: "cannot have a UFUNCTION() declaration above it")
-    virtual float GetInteractHoldPercent() const override;
 
     // ACabinetActor::OnInteract_Implementation()이 서버에서 호출: 장롱 안에서 술래에게 발각되어
     // 잡혔을 때(목조르기 연출 시작 직후). public이어야 CabinetActor(다른 클래스)에서 호출 가능.
@@ -411,10 +407,6 @@ protected:
     // "Ceiling" 태그를 찾는 것과 동일한 방식. 못 찾으면 false
     bool FindJailTransform(FTransform& OutTransform) const;
 
-    // Interact()의 라인 트레이스로 찾은 상호작용 대상을 서버에 알려서, 서버 권한으로 실제 처리(IInteractable::OnInteract)를 수행시킴
-    UFUNCTION(Server, Reliable)
-    void ServerInteractWithTarget(AActor* Target);
-
     // InteractMontage 재생을 서버에 요청 (예전엔 Interact()에서 로컬로만 Montage_Play해서 다른
     // 클라이언트에는 안 보였음). 술래의 KickDoor 몽타주와 동일한 Server->Multicast 패턴으로 바꿔서
     // 본인을 포함한 모든 클라이언트에서 동일하게 재생되게 함
@@ -425,12 +417,6 @@ protected:
     // 모든 클라이언트(서버 자신 포함)에서 동시에 실행
     UFUNCTION(NetMulticast, Reliable)
     void MulticastPlayInteractMontage();
-
-    // 홀드 상호작용 시작/취소를 서버에 알려서, 서버 권한으로 IInteractable::OnInteractHoldUpdate를 호출시킴
-    // (뚜껑 열리는 미리보기 애니메이션처럼 홀드 완료 전에도 연출이 필요한 경우에 사용. 홀드 완료 시에는
-    // ServerInteractWithTarget -> OnInteract 쪽에서 상태를 마무리하므로 별도로 false를 보내지 않아도 됨)
-    UFUNCTION(Server, Reliable)
-    void ServerSetInteractHold(AActor* Target, bool bHolding);
 
     // 이모트 시작을 서버에 요청. 서버가 재검증(ActiveEmoteIndex != 0이면 거부) 후 ActiveEmoteIndex를
     // 직접 바꿔주면, Replicated라서 본인 포함 전 클라이언트에 자동으로 뿌려짐 (Multicast 불필요)
@@ -446,11 +432,6 @@ private:
     // 현재 숨어있는 장롱 (숨어있지 않으면 nullptr). 서버에서만 채워짐
     UPROPERTY()
     TObjectPtr<ACabinetActor> CurrentCabinet;
-
-    // 홀드 상호작용 진행 중인 대상 (라인 트레이스로 찾은 즉시가 아니라, 홀드가 끝나야 서버로 전송됨)
-    TWeakObjectPtr<AActor> PendingHoldTarget;
-
-    FTimerHandle InteractHoldTimerHandle;
 
     // 숨기 직전 위치/회전. 나갈 때 이 자리로 복귀시키기 위해 EnterCabinet에서 캐싱함 (서버 전용, 복제 안 함)
     FTransform PreHideTransform;

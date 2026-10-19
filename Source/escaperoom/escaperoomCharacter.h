@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Logging/LogMacros.h"
+#include "TimerManager.h"
 #include "escaperoomCharacter.generated.h"
 
 class UInputComponent;
@@ -134,10 +135,14 @@ public:
 	/** Returns FirstPersonCameraComponent subobject **/
 	UCameraComponent* GetFirstPersonCameraComponent() const { return FirstPersonCameraComponent; }
 
-	/** 홀드가 필요한 상호작용 진행률(0~1). 홀드 중이 아니면 0을 반환. 자식 클래스(러너/술래)가 각자의 로컬 홀드 타이머(InteractHoldTimerHandle)
-	 * 기준으로 오버라이드함 - MatchWidget(다른 클래스)이 매 프레임 이 값을 읽어서 홀드 게이지 바를 갱신하므로 public이어야 함 */
+	/** 홀드가 필요한 상호작용 진행률(0~1). 홀드 중이 아니면 0을 반환. 로컬 홀드 타이머(InteractHoldTimerHandle) 기준
+	 * (러너/술래 공통 구현) - MatchWidget(다른 클래스)이 매 프레임 이 값을 읽어서 홀드 게이지 바를 갱신하므로 public이어야 함 */
 	UFUNCTION(BlueprintPure, Category = "Interaction")
-	virtual float GetInteractHoldPercent() const { return 0.f; }
+	virtual float GetInteractHoldPercent() const;
+
+	// 상호작용(홀드 포함) 진행 중 - CanMove()/CanLook() 등이 참고. 로컬 입력 게이팅 전용(서버 권위/복제 아님)
+	UPROPERTY(BlueprintReadOnly, Category = "State")
+	bool bIsInteracting = false;
 
 	// ---- 상호작용 대상 판정: 몸 정면 박스 (러너/술래 공통) ----
 	// 예전엔 카메라 정면 라인 트레이스였음. 지금은 술래 잡기(PerformGrabBoxCheck)처럼 몸 정면에 순간 박스를 만들어서
@@ -161,5 +166,63 @@ protected:
 	AActor* FindInteractableInFrontBox(TSubclassOf<AActor> RequiredClass = nullptr) const;
 
 	void GetInteractBox(FVector& OutCenter, FQuat& OutRotation) const;
+
+	// ---- 상호작용 공통 파이프라인 (러너/술래 공통) ----
+	// Interact(키 누름) -> CanStartInteract -> FindInteractableTarget -> ShouldStartInteract -> OnInteractStarted
+	//   -> 홀드 0초: HandleInstantInteract
+	//   -> 홀드 필요: 로컬 홀드 타이머 + ServerSetInteractHold(true) + 게이지
+	//        키를 떼면 CancelHoldInteract -> OnHoldInteractCanceled
+	//        타이머가 다 차면 CompleteHoldInteract -> OnHoldInteractCompleted
+	// 자식(러너/술래)은 역할별로 다른 부분만 아래 [훅]을 override한다. 바인딩은 자식의 SetupPlayerInputComponent에서
+
+	// 상호작용키를 누른 순간 (Started에 바인딩)
+	void Interact(const FInputActionValue& Value);
+
+	// 상호작용키를 뗀 순간 (Completed/Canceled에 바인딩): 홀드 중이었으면 취소
+	void CancelHoldInteract(const FInputActionValue& Value);
+
+	// CancelHoldInteract의 실제 취소 로직. 입력값 없이도 부를 수 있게 분리 (러너 Move()에서 이동 시 홀드 취소용)
+	void CancelHoldInteractInternal();
+
+	// 홀드 타이머가 다 찼을 때. 로컬 상태/게이지를 먼저 정리한 뒤 OnHoldInteractCompleted로 서버에 요청
+	// (순서가 반대면 리슨 서버에서 RPC가 즉시 처리되며 캐비닛이 Possess해가서 GetController()가 nullptr이 되고
+	//  게이지가 화면에 남는 버그가 생김)
+	void CompleteHoldInteract();
+
+	// [훅] 상호작용 입력을 받을지 (역할별 차단 조건). 기본 true
+	virtual bool CanStartInteract() const { return true; }
+
+	// [훅] 상호작용 대상 탐색. 기본 = 몸 정면 박스(FindInteractableInFrontBox). 술래는 문 우선으로 override
+	virtual AActor* FindInteractableTarget() const;
+
+	// [훅] 찾은 대상으로 상호작용을 시작할지 (서버가 최종 재검증함). 기본 = IInteractable::CanInteract
+	virtual bool ShouldStartInteract(AActor* Target);
+
+	// [훅] 홀드 여부와 상관없이 상호작용이 시작되는 순간 (몽타주 요청, 대상 기억 등). 기본 없음
+	virtual void OnInteractStarted(AActor* Target, float HoldTime) {}
+
+	// [훅] 홀드 시간이 0인 대상의 즉시 처리. 기본 = ServerInteractWithTarget
+	virtual void HandleInstantInteract(AActor* Target);
+
+	// [훅] 홀드가 취소된 직후 (공통 상태 정리가 끝난 뒤). 기본 없음
+	virtual void OnHoldInteractCanceled() {}
+
+	// [훅] 홀드가 다 찼을 때 (공통 상태/게이지 정리가 끝난 뒤, Target은 항상 유효). 기본 = ServerInteractWithTarget
+	virtual void OnHoldInteractCompleted(AActor* Target);
+
+	// 홀드 상호작용 진행 중인 대상 (홀드가 끝나야 서버로 전송됨)
+	TWeakObjectPtr<AActor> PendingHoldTarget;
+
+	// 로컬 홀드 타이머 (서버 응답을 기다리지 않는 클라이언트 예측). GetInteractHoldPercent의 진행률 소스
+	FTimerHandle InteractHoldTimerHandle;
+
+	// 대상을 서버에 알려서 서버 권한으로 IInteractable::OnInteract를 실행 (서버에서 CanInteract 재검증)
+	UFUNCTION(Server, Reliable)
+	void ServerInteractWithTarget(AActor* Target);
+
+	// 홀드 시작/취소를 서버에 알려서 서버 권한으로 IInteractable::OnInteractHoldUpdate를 실행.
+	// 시작(true)일 때만 CanInteract 재검증, 취소(false)는 미리보기 연출이 확실히 원상복구되도록 항상 통과
+	UFUNCTION(Server, Reliable)
+	void ServerSetInteractHold(AActor* Target, bool bHolding);
 };
 

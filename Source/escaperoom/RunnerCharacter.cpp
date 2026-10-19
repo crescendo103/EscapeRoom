@@ -80,10 +80,10 @@ void ARunnerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
         }
         if (InteractAction)
         {
-            EIC->BindAction(InteractAction, ETriggerEvent::Started, this, &ARunnerCharacter::Interact);
+            EIC->BindAction(InteractAction, ETriggerEvent::Started, this, &ThisClass::Interact);
             // 홀드가 필요한 상호작용(캐비넷 등) 도중에 키를 놓으면 취소되도록 Completed/Canceled 모두 바인딩
-            EIC->BindAction(InteractAction, ETriggerEvent::Completed, this, &ARunnerCharacter::CancelHoldInteract);
-            EIC->BindAction(InteractAction, ETriggerEvent::Canceled, this, &ARunnerCharacter::CancelHoldInteract);
+            EIC->BindAction(InteractAction, ETriggerEvent::Completed, this, &ThisClass::CancelHoldInteract);
+            EIC->BindAction(InteractAction, ETriggerEvent::Canceled, this, &ThisClass::CancelHoldInteract);
         }
         if (EmoteAction)
         {
@@ -181,12 +181,6 @@ void ARunnerCharacter::StopCrouch(const FInputActionValue& Value)
     ServerSetCrouching(false);
 }
 
-AActor* ARunnerCharacter::FindInteractableTarget() const
-{
-    // [변경] 카메라 라인 트레이스 -> 몸 정면 박스 (AescaperoomCharacter::FindInteractableInFrontBox)
-    return FindInteractableInFrontBox();
-}
-
 void ARunnerCharacter::PawnClientRestart()
 {
     Super::PawnClientRestart();
@@ -194,31 +188,22 @@ void ARunnerCharacter::PawnClientRestart()
     InteractBlockedUntil = GetWorld()->GetTimeSeconds() + InteractBlockAfterPossess;
 }
 
-void ARunnerCharacter::Interact(const FInputActionValue& Value)
+bool ARunnerCharacter::CanStartInteract() const
 {
     // 캐비넷에서 막 나온 직후, 계속 누르고 있던 나가기 키가 상호작용으로 다시 들어오는 것 무시
     if (GetWorld()->GetTimeSeconds() < InteractBlockedUntil)
     {
-        return;
+        return false;
     }
 
     // 이미 상호작용/이모트 중이면 중복 트리거 방지 (탈출한 뒤에는 아예 상호작용 불가)
-    if (bIsInteracting || bIsEmoting || bIsEscaped)
-    {
-        return;
-    }
+    return !bIsInteracting && !bIsEmoting && !bIsEscaped;
+}
 
-    AActor* Target = FindInteractableTarget();
-    if (!Target)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[Interact][Runner] No target found"));
-        return;
-    }
-
-    const float HoldTime = IInteractable::Execute_GetInteractHoldTime(Target, this);
-    const FText InteractHoldText = IInteractable::Execute_GetInteractionHoldText(Target, this);
-    UE_LOG(LogTemp, Warning, TEXT("[Interact][Runner] Target=%s CanInteract=%d HoldTime=%.2f"),
-        *GetNameSafe(Target), IInteractable::Execute_CanInteract(Target, this) ? 1 : 0, HoldTime);
+bool ARunnerCharacter::ShouldStartInteract(AActor* Target)
+{
+    UE_LOG(LogTemp, Warning, TEXT("[Interact][Runner] Target=%s CanInteract=%d"),
+        *GetNameSafe(Target), IInteractable::Execute_CanInteract(Target, this) ? 1 : 0);
     // [TEMP DEBUG] CanInteract=0 원인이 "이미 부서짐/열림 상태"인지 직접 확인용 - 원인 찾으면 지워도 됨
     if (const ADoorActor* DebugDoor = Cast<ADoorActor>(Target))
     {
@@ -227,148 +212,76 @@ void ARunnerCharacter::Interact(const FInputActionValue& Value)
     }
 
     // 탈출구는 이미 쓰였거나 다른 러너가 오르는 중이면(복제된 bIsOpen/CurrentClimber 기준) 홀드 자체를
-    // 시작하지 않음 - 안 막으면 서버는 거절했는데 내 화면에서만 5.9초 게이지가 차는 상황이 생김
+    // 시작하지 않음 - 안 막으면 서버는 거절했는데 내 화면에서만 게이지가 차는 상황이 생김.
+    // (다른 대상은 예전과 동일하게 클라에서 막지 않고 서버 재검증에 맡김)
     if (Cast<AExitActor>(Target) && !IInteractable::Execute_CanInteract(Target, this))
     {
-        return;
+        return false;
     }
+    return true;
+}
 
+void ARunnerCharacter::OnInteractStarted(AActor* Target, float HoldTime)
+{
     bIsInteracting = true;
     InteractLockedRotation = GetActorRotation(); // Tick()이 상호작용 중 이 값으로 회전을 고정함
 
     // 몽타주 재생은 즉시/홀드 상호작용 공통 연출.
-    // 탈출구(사다리)는 여기서 로컬로 미리 재생하지 않는다 - ClimbMontage는 서버가 홀드 시작을 승인한
+    // 탈출구(사다리)는 여기서 미리 재생하지 않는다 - ClimbMontage는 서버가 홀드 시작을 승인한
     // 뒤(OnInteractHoldUpdateInternal -> MulticastBeginLadderHold)에 서버 자신을 포함한 모든 클라이언트가
     // 동시에 재생해야 한다. 그 몽타주의 AnimNotify(NotifyClimbStep)가 만드는 위치 변화가 서버의 권위있는
-    // 위치로도 인정되어야 CharacterMovementComponent의 클라-서버 교차검증에서 원위치로 되돌아가지 않기
-    // 때문 - 로컬로만 먼저 재생해버리면 서버는 이 이동을 전혀 모르는 상태가 되어 결국 보정으로 되돌려짐
+    // 위치로도 인정되어야 CharacterMovementComponent의 클라-서버 교차검증에서 원위치로 되돌아가지 않기 때문
     const bool bIsClimbTarget = (Cast<AExitActor>(Target) != nullptr);
-    UAnimMontage* MontageToPlay = bIsClimbTarget ? nullptr : InteractMontage;
-
-    bool bPlayedMontage = bIsClimbTarget; // 사다리는 곧 서버 승인을 거쳐 재생될 예정이므로 대체 펄스 타이머 불필요
-    if (MontageToPlay)
+    if (!bIsClimbTarget && InteractMontage)
     {
-        // [NetMulticast로 변경] 예전엔 여기서 로컬로만 Montage_Play해서 본인 화면에만 보이고 다른
-        // 클라이언트에는 안 보였음. 술래의 KickDoor 몽타주와 동일하게 서버를 거쳐 Multicast로
-        // 재생시켜서 본인 포함 모든 클라이언트에서 동일하게 보이게 함 (종료 델리게이트 바인딩도
-        // MulticastPlayInteractMontage_Implementation 쪽으로 같이 옮김)
+        // Server -> Multicast로 본인 포함 모든 클라이언트에서 동일하게 재생 (종료 델리게이트 바인딩도 Multicast 쪽)
         ServerPlayInteractMontage();
-        bPlayedMontage = true;
     }
-
-    if (HoldTime <= 0.f)
-    {
-        // 즉시 처리 (문 등 기존 오브젝트). 실제 판정/처리는 서버에서 다시 검증됨
-        ServerInteractWithTarget(Target);
-
-        if (!bPlayedMontage)
-        {
-            // 몽타주가 없을 때를 위한 대체 동작 (기존 타이머 방식)
-            GetWorldTimerManager().SetTimer(InteractPulseTimerHandle, this, &ARunnerCharacter::EndInteractPulse, InteractPulseDuration, false);
-        }
-        return;
-    }
-
-    // 홀드가 필요한 상호작용 (캐비넷 숨기 등): 키를 뗄 때까지 / 시간이 찰 때까지 대기
-    PendingHoldTarget = Target;
-    GetWorldTimerManager().SetTimer(InteractHoldTimerHandle, this, &ARunnerCharacter::CompleteHoldInteract, HoldTime, false);
-
-    // 홀드가 시작됐음을 서버에 알려서 미리보기 연출(뚜껑 열리는 애니메이션 등)을 시작시킴
-    ServerSetInteractHold(Target, true);
-
-    // 홀드 게이지 바를 보여주기 위해 MatchWidget의 Tick을 켬 (키를 떼거나 홀드가 끝나면 다시 끔).
-    // 텍스트도 같이 넘겨서 "캐비닛 열기"처럼 게이지 옆에 무엇을 하는 중인지 보여줌
-    SetMatchWidgetHoldGaugeActive(true, InteractHoldText);
 }
 
-void ARunnerCharacter::CancelHoldInteract(const FInputActionValue& Value)
+void ARunnerCharacter::HandleInstantInteract(AActor* Target)
 {
-    CancelHoldInteractInternal();
+    // 즉시 처리 (문 등). 실제 판정/처리는 서버에서 다시 검증됨
+    Super::HandleInstantInteract(Target);
+
+    // 몽타주가 없을 때를 위한 대체 동작 - 몽타주가 있으면 종료 델리게이트가 bIsInteracting을 풀어줌
+    // (사다리는 곧 서버 승인을 거쳐 재생될 예정이므로 대체 펄스 타이머 불필요)
+    const bool bPlayedMontage = (Cast<AExitActor>(Target) != nullptr) || (InteractMontage != nullptr);
+    if (!bPlayedMontage)
+    {
+        GetWorldTimerManager().SetTimer(InteractPulseTimerHandle, this, &ARunnerCharacter::EndInteractPulse, InteractPulseDuration, false);
+    }
 }
 
-void ARunnerCharacter::CancelHoldInteractInternal()
+void ARunnerCharacter::OnHoldInteractCanceled()
 {
-    if (GetWorldTimerManager().IsTimerActive(InteractHoldTimerHandle))
+    // 클라이밍 미리보기 때문에 Flying으로 바꿔뒀었다면(사다리를 실제로 타지 않고 홀드만 취소된
+    // 경우) 다시 정상 걷기 모드로 복구
+    if (bClimbFlightModeActive)
     {
-        GetWorldTimerManager().ClearTimer(InteractHoldTimerHandle);
-
-        // 홀드가 취소됐음을 서버에 알려서 미리보기 연출을 원상복구시킴 (타이머를 지우기 전에 대상을 미리 캡처)
-        if (AActor* Target = PendingHoldTarget.Get())
+        if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
         {
-            ServerSetInteractHold(Target, false);
+            MoveComp->SetMovementMode(MOVE_Walking);
         }
+        bClimbFlightModeActive = false;
+    }
 
-        PendingHoldTarget = nullptr;
-        bIsInteracting = false;
-        SetMatchWidgetHoldGaugeActive(false);
-
-        // 클라이밍 미리보기 때문에 Flying으로 바꿔뒀었다면(사다리를 실제로 타지 않고 홀드만 취소된
-        // 경우) 다시 정상 걷기 모드로 복구
-        if (bClimbFlightModeActive)
+    // 홀드 도중 취소되면 재생 중이던 몽타주도 같이 정지 (블렌드 아웃). InteractMontage/ClimbMontage
+    // 둘 중 어느 게 재생 중이었는지 구분하지 않고 둘 다 정지 시도 - 재생 중이 아닌 쪽은 아무 일도 안 일어남
+    if (GetMesh())
+    {
+        if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
         {
-            if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+            if (InteractMontage)
             {
-                MoveComp->SetMovementMode(MOVE_Walking);
+                AnimInstance->Montage_Stop(0.2f, InteractMontage);
             }
-            bClimbFlightModeActive = false;
-        }
-
-        // 홀드 도중 취소되면 재생 중이던 몽타주도 같이 정지 (블렌드 아웃). InteractMontage/ClimbMontage
-        // 둘 중 어느 게 재생 중이었는지 여기서 굳이 구분하지 않고 둘 다 정지 시도 - 재생 중이 아닌
-        // 쪽은 Montage_Stop을 불러도 아무 일도 안 일어나서 안전함
-        if (GetMesh())
-        {
-            if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+            if (ClimbMontage)
             {
-                if (InteractMontage)
-                {
-                    AnimInstance->Montage_Stop(0.2f, InteractMontage);
-                }
-                if (ClimbMontage)
-                {
-                    AnimInstance->Montage_Stop(0.2f, ClimbMontage);
-                }
+                AnimInstance->Montage_Stop(0.2f, ClimbMontage);
             }
         }
     }
-}
-
-void ARunnerCharacter::CompleteHoldInteract()
-{
-    // 게이지를 먼저 끄고 상태를 정리한 다음에 서버로 완료를 통지한다 - 순서가 반대였으면(먼저 RPC를
-    // 보내고 나중에 정리) 리슨 서버/스탠드얼론에서는 이 RPC가 즉시(같은 프레임 안에서) 처리돼서 캐비넷
-    // 등이 Controller->Possess()로 조종권을 가져가버릴 수 있고, 그러면 이 시점의 GetController()가
-    // 이미 nullptr이 되어 SetMatchWidgetHoldGaugeActive(false)가 컨트롤러를 못 찾아 조용히 무시되고
-    // 게이지 바가 화면에 계속 남는 버그가 생긴다. 그래서 Controller가 확실히 붙어있는 지금 먼저 정리함
-    AActor* Target = PendingHoldTarget.Get();
-
-    PendingHoldTarget = nullptr;
-    bIsInteracting = false;
-    SetMatchWidgetHoldGaugeActive(false);
-
-    if (Target)
-    {
-        ServerInteractWithTarget(Target);
-    }
-}
-
-float ARunnerCharacter::GetInteractHoldPercent() const
-{
-    // Interact()가 건 로컬 타이머(서버 응답을 기다리지 않는 클라이언트 예측)를 그대로 진행률 소스로 사용.
-    // 홀드 중이 아니면(취소/완료로 타이머가 지워졌으면) 0
-    if (!GetWorldTimerManager().IsTimerActive(InteractHoldTimerHandle))
-    {
-        return 0.f;
-    }
-
-    const float Duration = GetWorldTimerManager().GetTimerRate(InteractHoldTimerHandle);
-    if (Duration <= 0.f)
-    {
-        return 0.f;
-    }
-
-    const float Elapsed = GetWorldTimerManager().GetTimerElapsed(InteractHoldTimerHandle);
-    return FMath::Clamp(Elapsed / Duration, 0.f, 1.f);
 }
 
 void ARunnerCharacter::EndInteractPulse()
@@ -513,24 +426,6 @@ bool ARunnerCharacter::CanMove() const
     return !bIsInteracting && !bIsHiding && !bIsBeingCaught && !bIsEscaped;
 }
 
-void ARunnerCharacter::ServerInteractWithTarget_Implementation(AActor* Target)
-{
-    // 서버에서 다시 한번 유효성 검사 (클라이언트가 알려준 대상/홀드 완료 여부를 맹신하지 않음)
-    if (!Target || !Target->GetClass()->ImplementsInterface(UInteractable::StaticClass()))
-    {
-        return;
-    }
-
-    if (!IInteractable::Execute_CanInteract(Target, this))
-    {
-        return;
-    }
-
-    // InteractMontage 재생은 이제 Interact()에서 ServerPlayInteractMontage() -> MulticastPlayInteractMontage()
-    // 경로로 처리됨 (본인 포함 모든 클라이언트에서 동일하게 보이도록). 여기서 다시 재생할 필요 없음
-    IInteractable::Execute_OnInteract(Target, this);
-}
-
 void ARunnerCharacter::ServerPlayInteractMontage_Implementation()
 {
     MulticastPlayInteractMontage();
@@ -551,23 +446,6 @@ void ARunnerCharacter::MulticastPlayInteractMontage_Implementation()
         EndDelegate.BindUObject(this, &ARunnerCharacter::OnInteractMontageEnded);
         AnimInstance->Montage_SetEndDelegate(EndDelegate, InteractMontage);
     }
-}
-
-void ARunnerCharacter::ServerSetInteractHold_Implementation(AActor* Target, bool bHolding)
-{
-    if (!Target || !Target->GetClass()->ImplementsInterface(UInteractable::StaticClass()))
-    {
-        return;
-    }
-
-    // 홀드를 "시작"할 때만 서버에서 다시 유효성 검사. 취소(false)는 항상 통과시켜서
-    // 미리보기 연출이 어떤 경우에도 확실히 원상복구되도록 함
-    if (bHolding && !IInteractable::Execute_CanInteract(Target, this))
-    {
-        return;
-    }
-
-    IInteractable::Execute_OnInteractHoldUpdate(Target, this, bHolding);
 }
 
 void ARunnerCharacter::EnterCabinet(ACabinetActor* Cabinet)

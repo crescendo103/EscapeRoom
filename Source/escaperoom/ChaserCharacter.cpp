@@ -83,12 +83,12 @@ void AChaserCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
         }
         if (InteractAction)
         {
-            EIC->BindAction(InteractAction, ETriggerEvent::Started, this, &AChaserCharacter::Interact);
+            EIC->BindAction(InteractAction, ETriggerEvent::Started, this, &ThisClass::Interact);
             // 홀드가 필요한 상호작용 도중에 키를 놓으면 취소되도록 Completed/Canceled 모두 바인딩
             // (러너와 동일한 패턴 - 지금은 모든 대상이 홀드 0이라 실질적으로 안 쓰이지만, 나중에
             // 홀드가 필요한 술래 전용 상호작용이 추가되면 바로 동작함)
-            EIC->BindAction(InteractAction, ETriggerEvent::Completed, this, &AChaserCharacter::CancelHoldInteract);
-            EIC->BindAction(InteractAction, ETriggerEvent::Canceled, this, &AChaserCharacter::CancelHoldInteract);
+            EIC->BindAction(InteractAction, ETriggerEvent::Completed, this, &ThisClass::CancelHoldInteract);
+            EIC->BindAction(InteractAction, ETriggerEvent::Canceled, this, &ThisClass::CancelHoldInteract);
         }
         if (OverheadViewAction)
         {
@@ -247,6 +247,88 @@ ADoorActor* AChaserCharacter::FindDoorTargetByCameraTrace() const
 {
     // [변경] 카메라 라인 트레이스 -> 몸 정면 박스. 박스 안의 문만 대상으로 (문 우선 탐색)
     return Cast<ADoorActor>(FindInteractableInFrontBox(ADoorActor::StaticClass()));
+}
+
+bool AChaserCharacter::CanStartInteract() const
+{
+    return !bIsGrab && !IsPlayingKickDoorMontage();
+}
+
+AActor* AChaserCharacter::FindInteractableTarget() const
+{
+    // 문 부수기(KickDoor) 대상은 정면 박스 안의 문 중에서 먼저 찾음 (문 우선).
+    // 문을 찾았으면 그 문을 Target으로 취급해서 캐비닛 등 다른 IInteractable 대상과 완전히 동일한
+    // 홀드 파이프라인을 탄다 - DoorActor::GetInteractHoldTime_Implementation이 술래에게는
+    // KickHoldTime을 반환하므로 자동으로 홀드+프로그레스바 대상이 됨
+    if (ADoorActor* Door = FindDoorTargetByCameraTrace())
+    {
+        return Door;
+    }
+    return Super::FindInteractableTarget();
+}
+
+bool AChaserCharacter::ShouldStartInteract(AActor* Target)
+{
+    // 서버가 최종 검증하긴 하지만(ServerInteractWithTarget/ServerSetInteractHold), 애초에
+    // 상호작용 불가능한 대상(예: 이미 열려있는 문을 술래가 다시 차려는 경우)이면 여기서 걸러서
+    // 헛되이 홀드 타이머/게이지/몽타주가 시작되지 않게 함 - InteractionRange 프롬프트도
+    // CanInteractInternal 기준으로 뜨므로 자연스럽게 서로 맞아떨어짐
+    const bool bTargetCanInteract = Super::ShouldStartInteract(Target);
+    ADoorActor* Door = Cast<ADoorActor>(Target);
+    UE_LOG(LogTemp, Warning, TEXT("[Interact][Chaser] Target=%s (IsDoor=%d) CanInteract=%d"),
+        *GetNameSafe(Target), Door != nullptr ? 1 : 0, bTargetCanInteract ? 1 : 0);
+    // [TEMP DEBUG] CanInteract=0 원인 확인 + Chaser 태그가 실제로 붙어있는지 확인용 - 원인 찾으면 지워도 됨
+    UE_LOG(LogTemp, Warning, TEXT("[Interact][Chaser] HasChaserTag=%d"), ActorHasTag(TEXT("Chaser")) ? 1 : 0);
+    if (Door)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[Interact][Chaser] DoorState IsOpen=%d IsBroken=%d"),
+            Door->IsOpen() ? 1 : 0, Door->IsBroken() ? 1 : 0);
+    }
+    return bTargetCanInteract;
+}
+
+void AChaserCharacter::OnInteractStarted(AActor* Target, float HoldTime)
+{
+    // 킥 몽타주의 AnimNotify(NotifyKickDoorHit)가 나중에 어느 문인지 꺼내 쓰므로 미리 기억해둠
+    // (홀드 0초면 HandleInstantInteract, 홀드면 CompleteHoldInteract 이후에 몽타주가 재생됨)
+    if (ADoorActor* Door = Cast<ADoorActor>(Target))
+    {
+        PendingKickDoorTarget = Door;
+    }
+}
+
+void AChaserCharacter::HandleInstantInteract(AActor* Target)
+{
+    // 문은 홀드시간이 0으로 설정돼 있어도 일반 OnInteract가 아니라 킥 몽타주로 처리해야 함.
+    // 실제 파괴는 몽타주에 심어둔 AnimNotify(UAnimNotify_ChaserKickDoor)가 발로 문을 차는
+    // 프레임에서 NotifyKickDoorHit()을 호출하는 시점에 실행된다
+    if (Cast<ADoorActor>(Target))
+    {
+        ServerPlayKickDoorMontage();
+        return;
+    }
+
+    Super::HandleInstantInteract(Target);
+}
+
+void AChaserCharacter::OnHoldInteractCanceled()
+{
+    // 킥도어 홀드 도중 취소된 경우, 몽타주 자체가 재생되지 않으므로 문 파괴로 이어지면 안 됨
+    PendingKickDoorTarget = nullptr;
+}
+
+void AChaserCharacter::OnHoldInteractCompleted(AActor* Target)
+{
+    // 문은 일반 OnInteract가 아니라 킥 몽타주 재생을 요청함 - PendingKickDoorTarget은 OnInteractStarted에서
+    // 이미 세팅해뒀으므로, 몽타주 재생 후 발이 닿는 타이밍(AnimNotify)에 NotifyKickDoorHit()가
+    // 실제 파괴(ServerBreakDoor)를 트리거한다
+    if (Cast<ADoorActor>(Target))
+    {
+        ServerPlayKickDoorMontage();
+        return;
+    }
+
+    Super::OnHoldInteractCompleted(Target);
 }
 
 void AChaserCharacter::Grab(const FInputActionValue& Value)
@@ -532,196 +614,6 @@ void AChaserCharacter::NotifyKickDoorHit()
     // Break()(서버)/OnRep_IsBroken()(모든 클라) 양쪽 경로에서 다 호출되므로 다른 클라에서도 보임 -
     // 여기서는 파괴 요청만 서버로 보내면 됨
     ServerBreakDoor(Door);
-}
-
-AActor* AChaserCharacter::FindInteractableTarget() const
-{
-    // [변경] 카메라 라인 트레이스 -> 몸 정면 박스 (AescaperoomCharacter::FindInteractableInFrontBox)
-    return FindInteractableInFrontBox();
-}
-
-void AChaserCharacter::Interact(const FInputActionValue& Value)
-{
-    if (bIsGrab || IsPlayingKickDoorMontage())
-    {
-        return;
-    }
-
-    // 문 부수기(KickDoor) 대상은 정면 박스 안의 문 중에서 먼저 찾음 (문 우선)
-    ADoorActor* Door = FindDoorTargetByCameraTrace();
-
-    // 문을 찾았으면 그 문을 Target으로 취급해서 캐비닛 등 다른 IInteractable 대상과 완전히 동일한
-    // 홀드 파이프라인(아래)을 탄다 - DoorActor::GetInteractHoldTime_Implementation이 술래에게는
-    // KickHoldTime(기본 3초)을 반환하므로 자동으로 홀드+프로그레스바 대상이 됨
-    AActor* Target = Door;
-    if (!Target)
-    {
-        Target = FindInteractableTarget();
-    }
-
-    if (!Target)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[Interact][Chaser] No target found (Door=%s)"), *GetNameSafe(Door));
-        return;
-    }
-
-    // 서버가 최종 검증하긴 하지만(ServerInteractWithTarget/ServerSetInteractHold), 애초에
-    // 상호작용 불가능한 대상(예: 이미 열려있는 문을 술래가 다시 차려는 경우)이면 여기서 걸러서
-    // 헛되이 홀드 타이머/게이지/몽타주가 시작되지 않게 함 - InteractionRange 프롬프트도
-    // CanInteractInternal 기준으로 뜨므로 자연스럽게 서로 맞아떨어짐
-    const bool bTargetCanInteract = IInteractable::Execute_CanInteract(Target, this);
-    UE_LOG(LogTemp, Warning, TEXT("[Interact][Chaser] Target=%s (IsDoor=%d) CanInteract=%d"),
-        *GetNameSafe(Target), Door != nullptr ? 1 : 0, bTargetCanInteract ? 1 : 0);
-    // [TEMP DEBUG] CanInteract=0 원인 확인 + Chaser 태그가 실제로 붙어있는지 확인용 - 원인 찾으면 지워도 됨
-    UE_LOG(LogTemp, Warning, TEXT("[Interact][Chaser] HasChaserTag=%d"), ActorHasTag(TEXT("Chaser")) ? 1 : 0);
-    if (Door)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[Interact][Chaser] DoorState IsOpen=%d IsBroken=%d"),
-            Door->IsOpen() ? 1 : 0, Door->IsBroken() ? 1 : 0);
-    }
-
-    if (!bTargetCanInteract)
-    {
-        return;
-    }
-
-    const float HoldTime = IInteractable::Execute_GetInteractHoldTime(Target, this);
-    const FText InteractHoldText = IInteractable::Execute_GetInteractionHoldText(Target, this);
-
-    if (HoldTime <= 0.f)
-    {
-        if (Door)
-        {
-            // 문은 홀드시간이 0으로 설정돼 있어도 일반 OnInteract가 아니라 킥 몽타주로 처리해야 함.
-            // 실제 파괴는 몽타주에 심어둔 AnimNotify(UAnimNotify_ChaserKickDoor)가 발로 문을 차는
-            // 프레임에서 NotifyKickDoorHit()을 호출하는 시점에 실행된다
-            PendingKickDoorTarget = Door;
-            ServerPlayKickDoorMontage();
-            return;
-        }
-
-        // 즉시 처리 (홀드 시간이 0인 대상만 해당). 실제 판정/처리는 서버에서 다시 검증됨
-        ServerInteractWithTarget(Target);
-        return;
-    }
-
-    if (Door)
-    {
-        // 몽타주 재생은 홀드가 끝난 뒤(CompleteHoldInteract)에 요청하지만, 그 시점에 어느 문인지
-        // 알아야 하므로 미리 기억해둠 - NotifyKickDoorHit()이 나중에 이 값을 꺼내 씀
-        PendingKickDoorTarget = Door;
-    }
-
-    // 홀드가 필요한 상호작용(캐비닛 채널링, 이제 킥도어도 포함): 러너와 동일하게 로컬 타이머로
-    // HoldTime을 직접 재고, 다 채우면 CompleteHoldInteract()가 대상에 맞는 완료 처리를 한다.
-    // 그동안 CanMove()는 bIsInteracting을 보고 이동을 막음
-    PendingHoldTarget = Target;
-    bIsInteracting = true;
-    GetWorldTimerManager().SetTimer(InteractHoldTimerHandle, this, &AChaserCharacter::CompleteHoldInteract, HoldTime, false);
-
-    // 홀드가 시작됐음을 서버에 알려서 "여는 중"/"부수는 중" 연출을 시작시킴
-    ServerSetInteractHold(Target, true);
-
-    // 홀드 게이지 바를 보여주기 위해 MatchWidget의 Tick을 켬 (키를 떼거나 홀드가 끝나면 다시 끔).
-    // 텍스트도 같이 넘겨서 "문 부수는 중..."처럼 게이지 옆에 무엇을 하는 중인지 보여줌
-    SetMatchWidgetHoldGaugeActive(true, InteractHoldText);
-}
-
-void AChaserCharacter::CancelHoldInteract(const FInputActionValue& Value)
-{
-    if (GetWorldTimerManager().IsTimerActive(InteractHoldTimerHandle))
-    {
-        GetWorldTimerManager().ClearTimer(InteractHoldTimerHandle);
-
-        if (AActor* Target = PendingHoldTarget.Get())
-        {
-            ServerSetInteractHold(Target, false);
-        }
-
-        // 킥도어 홀드 도중 취소된 경우, 몽타주 자체가 재생되지 않으므로 문 파괴로 이어지면 안 됨
-        PendingKickDoorTarget = nullptr;
-
-        PendingHoldTarget = nullptr;
-        bIsInteracting = false;
-        SetMatchWidgetHoldGaugeActive(false);
-    }
-}
-
-void AChaserCharacter::CompleteHoldInteract()
-{
-    // ARunnerCharacter::CompleteHoldInteract()와 동일한 이유로 순서를 바꿈: 정리(게이지 끄기 포함)를
-    // 먼저 하고 나서 서버 RPC를 보낸다 (리슨 서버/스탠드얼론에서 RPC가 동기적으로 즉시 처리되면서
-    // Controller가 다른 폰으로 Possess-교체되어 GetController()가 먼저 nullptr이 되는 것을 방지)
-    AActor* Target = PendingHoldTarget.Get();
-
-    PendingHoldTarget = nullptr;
-    bIsInteracting = false;
-    SetMatchWidgetHoldGaugeActive(false);
-
-    if (!Target)
-    {
-        return;
-    }
-
-    if (Cast<ADoorActor>(Target))
-    {
-        // 문은 일반 OnInteract가 아니라 킥 몽타주 재생을 요청함 - PendingKickDoorTarget은 Interact()에서
-        // 이미 세팅해뒀으므로, 몽타주 재생 후 발이 닿는 타이밍(AnimNotify)에 NotifyKickDoorHit()가
-        // 실제 파괴(ServerBreakDoor)를 트리거한다
-        ServerPlayKickDoorMontage();
-        return;
-    }
-
-    ServerInteractWithTarget(Target);
-}
-
-float AChaserCharacter::GetInteractHoldPercent() const
-{
-    // ARunnerCharacter::GetInteractHoldPercent()와 완전히 동일한 패턴 (로컬 타이머 기준 클라이언트 예측)
-    if (!GetWorldTimerManager().IsTimerActive(InteractHoldTimerHandle))
-    {
-        return 0.f;
-    }
-
-    const float Duration = GetWorldTimerManager().GetTimerRate(InteractHoldTimerHandle);
-    if (Duration <= 0.f)
-    {
-        return 0.f;
-    }
-
-    const float Elapsed = GetWorldTimerManager().GetTimerElapsed(InteractHoldTimerHandle);
-    return FMath::Clamp(Elapsed / Duration, 0.f, 1.f);
-}
-
-void AChaserCharacter::ServerInteractWithTarget_Implementation(AActor* Target)
-{
-    // 서버에서 다시 한번 유효성 검사 (클라이언트가 알려준 대상을 맹신하지 않음)
-    if (!Target || !Target->GetClass()->ImplementsInterface(UInteractable::StaticClass()))
-    {
-        return;
-    }
-
-    if (!IInteractable::Execute_CanInteract(Target, this))
-    {
-        return;
-    }
-
-    IInteractable::Execute_OnInteract(Target, this);
-}
-
-void AChaserCharacter::ServerSetInteractHold_Implementation(AActor* Target, bool bHolding)
-{
-    if (!Target || !Target->GetClass()->ImplementsInterface(UInteractable::StaticClass()))
-    {
-        return;
-    }
-
-    if (bHolding && !IInteractable::Execute_CanInteract(Target, this))
-    {
-        return;
-    }
-
-    IInteractable::Execute_OnInteractHoldUpdate(Target, this, bHolding);
 }
 
 void AChaserCharacter::Tick(float DeltaSeconds)

@@ -101,10 +101,6 @@ public:
     // 1인칭이라 몸 방향이 컨트롤러 회전을 따라가므로 컨트롤러 회전도 같이 맞춤(서버 + 술래 본인 클라)
     void SnapForChokeGrab(const FVector& Location, const FRotator& Rotation);
 
-    // 홀드 상호작용 진행률(0~1). InteractHoldTimerHandle이 활성 상태일 때만 0보다 큼 (MatchWidget이 참고, 러너와 동일한 패턴).
-    // 부모에서 이미 UFUNCTION(BlueprintPure)로 선언되어 있어서 오버라이드에는 UFUNCTION()을 다시 붙이지 않음
-    virtual float GetInteractHoldPercent() const override;
-
 protected:
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaSeconds) override;
@@ -381,6 +377,8 @@ protected:
     // ServerStartGrabPulse()를 보내고, 서버가 잡기 애니메이션 + 정면 박스 판정을 함께 처리함
     void Grab(const FInputActionValue& Value);
 
+    // ---- 상호작용: 공통 흐름(Interact/홀드/완료/취소/서버 RPC)은 부모(AescaperoomCharacter)에 있음.
+    // 술래 전용 부분만 아래 훅으로 override. 전체 동작 설명(원래 Interact 주석):
     // 상호작용 입력 처리. 먼저 카메라 정면 라인 트레이스(FindDoorTargetByCameraTrace)로
     // 문 부수기(KickDoor) 대상을 찾음. 문을 찾았으면 그 문을
     // Target으로 취급해서 캐비닛 등 다른 IInteractable 대상과 완전히 동일한 홀드 파이프라인을 탄다 -
@@ -392,40 +390,34 @@ protected:
     // CancelHoldInteract()가 그대로 취소함(문 파괴 자체가 시작되지 않음).
     // 문이 아니면 캐비닛 등 기존과 동일한 공용 처리로 이어짐 - 홀드 중에는 bIsInteracting=true가 되어
     // CanMove()가 이동을 막는다
-    void Interact(const FInputActionValue& Value);
 
-    // 상호작용키를 뗀 순간: 홀드 타이머가 아직 진행 중이었다면 취소 (러너의 CancelHoldInteract와 동일)
-    void CancelHoldInteract(const FInputActionValue& Value);
+    // 잡기 중 / 킥 몽타주 재생 중이면 막음
+    virtual bool CanStartInteract() const override;
 
-    // 홀드 타이머 완료 시 실제로 서버에 상호작용을 요청
-    void CompleteHoldInteract();
+    // 문 우선: 정면 박스 안의 문 -> 없으면 부모 기본(정면 박스 안의 IInteractable)
+    virtual AActor* FindInteractableTarget() const override;
 
-    // 몸 정면 박스 안의 IInteractable 중 가장 가까운 액터 (없으면 nullptr). 러너와 같은 공통 함수 사용
-    AActor* FindInteractableTarget() const;
+    // 모든 대상 CanInteract 체크 (+ 디버그 로그) - 이미 열린 문 등에 게이지/몽타주가 헛되이 시작되지 않게
+    virtual bool ShouldStartInteract(AActor* Target) override;
+
+    // 문이면 PendingKickDoorTarget 기억 (킥 AnimNotify가 나중에 꺼내 씀)
+    virtual void OnInteractStarted(AActor* Target, float HoldTime) override;
+
+    // 홀드 0초: 문이면 킥 몽타주, 아니면 부모 기본(ServerInteractWithTarget)
+    virtual void HandleInstantInteract(AActor* Target) override;
+
+    // 홀드 취소: 킥할 문 기억 해제 (문 파괴로 이어지면 안 됨)
+    virtual void OnHoldInteractCanceled() override;
+
+    // 홀드 완료: 문이면 킥 몽타주, 아니면 부모 기본(ServerInteractWithTarget)
+    virtual void OnHoldInteractCompleted(AActor* Target) override;
 
     // [미사용] 예전 라인 트레이스 사거리. 지금은 정면 박스(InteractBoxForwardOffset/InteractBoxExtent)로 판정
     UPROPERTY(EditDefaultsOnly, Category = "Input")
     float InteractRange = 200.f;
 
-    // 홀드 상호작용 진행 중인 대상 (라인 트레이스로 찾은 즉시가 아니라, 홀드가 끝나야 서버로 전송됨)
-    TWeakObjectPtr<AActor> PendingHoldTarget;
-
-    // 홀드 상호작용(캐비닛 채널링 등) 진행 중인지 - 홀드 시작 시 true, 취소/완료 시 false.
-    // CanMove()가 참고해서 홀드 중에는 제자리에 멈춰있도록 함 (ARunnerCharacter::bIsInteracting과 동일한 역할).
-    // 서버 권위/복제는 아님(로컬 입력 게이팅 전용) - CanMove()가 로컬 컨트롤 클라이언트에서만 쓰이기 때문
-    UPROPERTY(BlueprintReadOnly, Category = "State")
-    bool bIsInteracting = false;
-
-    FTimerHandle InteractHoldTimerHandle;
-
-    // Interact()의 라인 트레이스로 찾은 상호작용 대상을 서버에 알려서, 서버 권한으로 실제 처리
-    // (IInteractable::OnInteract)를 수행시킴
-    UFUNCTION(Server, Reliable)
-    void ServerInteractWithTarget(AActor* Target);
-
-    // 홀드 상호작용 시작/취소를 서버에 알려서, 서버 권한으로 IInteractable::OnInteractHoldUpdate를 호출시킴
-    UFUNCTION(Server, Reliable)
-    void ServerSetInteractHold(AActor* Target, bool bHolding);
+    // PendingHoldTarget / bIsInteracting / InteractHoldTimerHandle / ServerInteractWithTarget / ServerSetInteractHold는
+    // 부모(AescaperoomCharacter)로 이동 (러너/술래 공통)
 
     // 부감 토글 입력 처리 (키를 누르는 순간에만 호출됨, 뗄 때는 아무 동작 없음)
     void ToggleOverheadView(const FInputActionValue& Value);
