@@ -162,7 +162,9 @@ void ADoorActor::ActivateBrokenMesh()
 
 	// 딜레이 없이 바로 Shatter 처리 - 지금 Damage Threshold(1.0)가 워낙 낮아서
 	// 등록 타이밍 문제로 씹힐 걱정 없이 바로 호출해도 확실히 끊어짐
-	ShatterBrokenMesh();
+	// SetSimulatePhysics(true)와 같은 프레임에 Strain을 주면 Chaos 물리 프록시가 아직 준비 안 돼서
+	// 가끔 씹힘 -> GC가 안 쪼개지고 문 통짜로 넘어짐. 다음 틱에 Shatter해서 프록시 등록 이후에 들어가게 함
+	GetWorldTimerManager().SetTimerForNextTick(FTimerDelegate::CreateUObject(this, &ADoorActor::ShatterBrokenMesh));
 	SpawnKickImpactEffect();
 }
 

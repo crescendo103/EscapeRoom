@@ -116,7 +116,7 @@ protected:
 
 	/** 홀드 상호작용 시작/취소/완료 시점에 자식 클래스(러너/술래)가 호출: 그동안만 MatchWidget의 홀드 게이지 Tick을 켜고 끔.
 	 * HoldText를 같이 넘기면 게이지 옆에 "캐비닛 열기"처럼 무엇을 하는 중인지 텍스트로도 보여줌(비워두면 텍스트 없이 게이지만).
-	 * (Controller가 ADungeonPlayerController가 아니거나 MatchWidget을 아직 못 찾았으면 조용히 무시) */
+	 * (Controller가 ADungeonPlayerController가 아니거나 MatchWidget을 아직 못 찾았으면 무시) */
 	void SetMatchWidgetHoldGaugeActive(bool bActive, const FText& HoldText = FText::GetEmpty()) const;
 
 	/** Move()에서 매 프레임 저장되는 최근 이동 입력값 (X = 좌우, Y = 전후). 자식 클래스에서 이동 방향 판단용으로 사용 */
