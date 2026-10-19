@@ -35,6 +35,12 @@ ADoorActor::ADoorActor()
 	ChaserInteractPoint->SetupAttachment(Root);
 	ChaserInteractPoint->SetRelativeLocation(FVector(80.f, 0.f, 0.f));
 	ChaserInteractPoint->SetRelativeRotation(FRotator(0.f, 180.f, 0.f));
+
+	// 반대편(뒤쪽) 킥 시작 위치 - 기본값은 문 뒤 80cm에서 문을 바라보는 방향
+	ChaserInteractPointBack = CreateDefaultSubobject<USceneComponent>(TEXT("ChaserInteractPointBack"));
+	ChaserInteractPointBack->SetupAttachment(Root);
+	ChaserInteractPointBack->SetRelativeLocation(FVector(-80.f, 0.f, 0.f));
+	ChaserInteractPointBack->SetRelativeRotation(FRotator(0.f, 0.f, 0.f));
 }
 
 void ADoorActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -64,13 +70,25 @@ void ADoorActor::OnInteractHoldUpdateInternal(APawn* Interactor, bool bHolding)
 	{
 		if (bHolding)
 		{
-			// 홀드 시작 순간 한 번: 술래를 ChaserInteractPoint로 옮기고 문을 바라보게 함
+			// 홀드 시작 순간 한 번: 앞/뒤 ChaserInteractPoint 중 술래와 더 가까운 쪽으로 옮기고 문을 바라보게 함
 			// (높이는 술래 현재 Z 유지, 회전은 Yaw만). 홀드 중엔 bIsInteracting으로 이동이 막혀 그대로 유지됨
-			if (ChaserInteractPoint)
+			USceneComponent* SnapPoint = ChaserInteractPoint;
+			if (ChaserInteractPointBack)
 			{
-				FVector SnapLocation = ChaserInteractPoint->GetComponentLocation();
+				const FVector ChaserLoc = Chaser->GetActorLocation();
+				if (!SnapPoint
+					|| FVector::DistSquared2D(ChaserInteractPointBack->GetComponentLocation(), ChaserLoc)
+					 < FVector::DistSquared2D(SnapPoint->GetComponentLocation(), ChaserLoc))
+				{
+					SnapPoint = ChaserInteractPointBack;
+				}
+			}
+
+			if (SnapPoint)
+			{
+				FVector SnapLocation = SnapPoint->GetComponentLocation();
 				SnapLocation.Z = Chaser->GetActorLocation().Z;
-				const FRotator SnapRotation(0.f, ChaserInteractPoint->GetComponentRotation().Yaw, 0.f);
+				const FRotator SnapRotation(0.f, SnapPoint->GetComponentRotation().Yaw, 0.f);
 				Chaser->SnapForChokeGrab(SnapLocation, SnapRotation);
 			}
 
