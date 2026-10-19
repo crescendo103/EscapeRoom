@@ -28,6 +28,13 @@ ADoorActor::ADoorActor()
 	ImpactPoint = CreateDefaultSubobject<USceneComponent>(TEXT("ImpactPoint"));
 	ImpactPoint->SetupAttachment(MeshRoot);
 	ImpactPoint->SetRelativeLocation(FVector(0.f, 0.f, 100.f)); // 기본값, 블루프린트에서 문 메시 중심에 맞게 조정
+
+	// 술래 킥 시작 위치 - 문이 열리거나 부서져도 따라 움직이지 않게 MeshRoot가 아니라 Root에 붙임.
+	// 기본값은 문 정면(X축) 80cm 앞에서 문을 바라보는 방향, 실제 위치/방향은 블루프린트에서 조정
+	ChaserInteractPoint = CreateDefaultSubobject<USceneComponent>(TEXT("ChaserInteractPoint"));
+	ChaserInteractPoint->SetupAttachment(Root);
+	ChaserInteractPoint->SetRelativeLocation(FVector(80.f, 0.f, 0.f));
+	ChaserInteractPoint->SetRelativeRotation(FRotator(0.f, 180.f, 0.f));
 }
 
 void ADoorActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -57,6 +64,16 @@ void ADoorActor::OnInteractHoldUpdateInternal(APawn* Interactor, bool bHolding)
 	{
 		if (bHolding)
 		{
+			// 홀드 시작 순간 한 번: 술래를 ChaserInteractPoint로 옮기고 문을 바라보게 함
+			// (높이는 술래 현재 Z 유지, 회전은 Yaw만). 홀드 중엔 bIsInteracting으로 이동이 막혀 그대로 유지됨
+			if (ChaserInteractPoint)
+			{
+				FVector SnapLocation = ChaserInteractPoint->GetComponentLocation();
+				SnapLocation.Z = Chaser->GetActorLocation().Z;
+				const FRotator SnapRotation(0.f, ChaserInteractPoint->GetComponentRotation().Yaw, 0.f);
+				Chaser->SnapForChokeGrab(SnapLocation, SnapRotation);
+			}
+
 			Chaser->MulticastBeginKickCharge();
 		}
 		else

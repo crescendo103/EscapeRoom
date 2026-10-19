@@ -136,6 +136,12 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "WFC")
 	TObjectPtr<USceneComponent> ImpactPoint;
 
+	// 술래가 문 부수기 홀드를 시작하는 순간 한 번 옮겨질 위치/방향 마커.
+	// 블루프린트에서 문 앞에 배치하고 X축(빨간 화살표)이 문을 바라보도록 회전시킬 것.
+	// 위치는 X/Y만 사용(높이는 술래 현재 Z 유지), 회전은 Yaw만 사용
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "WFC|Door")
+	TObjectPtr<USceneComponent> ChaserInteractPoint;
+
 	// KickDoor 몽타주 타격 시 재생할 나이아가라 이펙트. 예전에는 ChaserCharacter가 들고 있었으나,
 	// 리플리케이션 경로(Break()/OnRep_IsBroken()) 위에서 확실히 모든 클라에 재생되도록 Door로 옮겨옴
 	UPROPERTY(EditDefaultsOnly, Category = "WFC|Door")

@@ -168,6 +168,12 @@ protected:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cabinet")
     TObjectPtr<USceneComponent> ChaserCatchPoint;
 
+    // 술래가 캐비넷 열기 홀드를 시작하는 순간 한 번 옮겨질 위치/방향 마커 (잡을 때 쓰는 ChaserCatchPoint와 별개).
+    // 블루프린트에서 캐비넷 앞에 배치하고 X축(빨간 화살표)이 캐비넷을 바라보도록 회전시킬 것.
+    // 위치는 X/Y만 사용(높이는 술래 현재 Z 유지), 회전은 Yaw만 사용
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cabinet")
+    TObjectPtr<USceneComponent> ChaserInteractPoint;
+
     // 문틈으로 훔쳐보는 시점을 만들기 위한 아주 짧은 스프링암 (회전시키면 고정된 지점을 중심으로 도는 효과)
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cabinet|Peek")
     TObjectPtr<USpringArmComponent> PeekArm;

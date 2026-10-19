@@ -43,6 +43,13 @@ ACabinetActor::ACabinetActor()
     ChaserCatchPoint->SetRelativeLocation(FVector(100.f, 0.f, 0.f));
     ChaserCatchPoint->SetRelativeRotation(FRotator(0.f, 180.f, 0.f));
 
+    // 술래 열기 시작 위치 마커 - 기본값은 ChaserCatchPoint와 같은 곳(캐비넷 정면 100cm 앞, 캐비넷을 바라봄).
+    // 실제 위치/방향은 블루프린트에서 조정
+    ChaserInteractPoint = CreateDefaultSubobject<USceneComponent>(TEXT("ChaserInteractPoint"));
+    ChaserInteractPoint->SetupAttachment(Root);
+    ChaserInteractPoint->SetRelativeLocation(FVector(100.f, 0.f, 0.f));
+    ChaserInteractPoint->SetRelativeRotation(FRotator(0.f, 180.f, 0.f));
+
     // 문틈 훔쳐보기: 아주 짧은 스프링암을 회전시키면 그 지점을 중심으로 도는 효과가 그대로 나옴
     PeekArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("PeekArm"));
     PeekArm->SetupAttachment(Root);
@@ -437,6 +444,16 @@ void ACabinetActor::OnInteractHoldUpdate_Implementation(APawn* Interactor, bool 
         {
             if (bHolding)
             {
+                // 홀드 시작 순간 한 번: 술래를 ChaserInteractPoint로 옮기고 캐비넷을 바라보게 함
+                // (높이는 술래 현재 Z 유지, 회전은 Yaw만). 홀드 중엔 bIsInteracting으로 이동이 막혀 그대로 유지됨
+                if (ChaserInteractPoint)
+                {
+                    FVector SnapLocation = ChaserInteractPoint->GetComponentLocation();
+                    SnapLocation.Z = Chaser->GetActorLocation().Z;
+                    const FRotator SnapRotation(0.f, ChaserInteractPoint->GetComponentRotation().Yaw, 0.f);
+                    Chaser->SnapForChokeGrab(SnapLocation, SnapRotation);
+                }
+
                 Chaser->MulticastBeginCabinetOpen();
             }
             else
