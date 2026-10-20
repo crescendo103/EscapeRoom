@@ -93,14 +93,8 @@ public:
 	bool IsInMatch() const { return bInMatch; }
 	bool IsMatchHost() const { return bIsMatchHost; }
 
-	// ---------------- 술래 이탈 결과 모드 ----------------
-	// GameLV를 이 옵션을 붙여 혼자 모드로 열면 맵 생성 없이 결과 방 연출만 함
-	static constexpr const TCHAR* HostLeftResultOption = TEXT("HostLeftResult");
-
-	// 이 월드가 "술래 이탈 결과 모드"로 열린 GameLV인지 (WFCGridManager / DungeonPlayerController 등이 확인)
-	static bool IsHostLeftResultWorld(const UWorld* World);
-
-	// 결과 방에 세울 내 캐릭터 외형. 매치 중 빙의 시점에 저장해두면, 튕겨서 컨트롤러가 새로 만들어져도 남아있음
+	// ---------------- 결과 방 캐릭터 외형 ----------------
+	// 로비 결과 방에 세울 내 캐릭터 외형. 매치 중 빙의 시점에 저장해두면, 로비로 옮겨가도 남아있음
 	void SetResultCharacter(USkeletalMesh* Mesh, const TArray<TObjectPtr<UMaterialInterface>>& Materials);
 	USkeletalMesh* GetResultMesh() const { return ResultMesh; }
 	const TArray<TObjectPtr<UMaterialInterface>>& GetResultMaterials() const { return ResultMaterials; }

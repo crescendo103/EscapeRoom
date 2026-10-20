@@ -77,11 +77,6 @@ void UEscapeRoomSessionSubsystem::EndMatch()
 	bMatchResultReceived = false;
 }
 
-bool UEscapeRoomSessionSubsystem::IsHostLeftResultWorld(const UWorld* World)
-{
-	return World && World->URL.HasOption(HostLeftResultOption);
-}
-
 void UEscapeRoomSessionSubsystem::SetResultCharacter(USkeletalMesh* Mesh, const TArray<TObjectPtr<UMaterialInterface>>& Materials)
 {
 	ResultMesh = Mesh;

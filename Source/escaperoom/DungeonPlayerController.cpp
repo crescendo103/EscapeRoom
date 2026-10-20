@@ -71,14 +71,6 @@ void ADungeonPlayerController::InitLocalUI()
 	}
 	bLocalUIInitialized = true;
 
-	// [리슨] 술래가 매치 도중 나가서 GameLV를 혼자 모드 결과 모드(?HostLeftResult)로 다시 연 경우:
-	// 맵 생성/로딩 위젯 없이 바로 러너 승리 엔딩 (WFCGridManager도 이 모드에선 생성을 안 함)
-	if (UEscapeRoomSessionSubsystem::IsHostLeftResultWorld(GetWorld()))
-	{
-		ShowHostLeftResult();
-		return;
-	}
-
 	// 바로 찾기를 시도하고, 실패하면 찾을 때까지 타이머 재시도
 	InitializeMapGeneratorBinding();
 }
@@ -266,16 +258,6 @@ void ADungeonPlayerController::AutoManageActiveCameraTarget(AActor* SuggestedTar
 {
 	// 로딩 중(아직 러너/술래 폰을 Possess하기 전): 폰 없는 컨트롤러는 엔진이 자동으로 관전 상태로 만들고
 	// SpectatorPawn을 스폰해서 시점을 그쪽으로 옮기는데, 그걸 막고 LoadingCamera를 유지한다
-	// 결과 방 연출 중에는 엔진이 시점을 폰/관전 쪽으로 옮기지 못하게 고정
-	if (bShowingResultRoom && ActiveResultRoom.IsValid())
-	{
-		if (GetViewTarget() != ActiveResultRoom.Get())
-		{
-			SetViewTarget(ActiveResultRoom.Get());
-		}
-		return;
-	}
-
 	if (bAutoManageActiveCameraTarget && !GetPawn())
 	{
 		if (AActor* LoadingCamera = FindLoadingCamera())
@@ -330,13 +312,6 @@ void ADungeonPlayerController::Tick(float DeltaSeconds)
 	if (IsLocalController() && BGMAudio)
 	{
 		UpdateBGMForTerrorRadius();
-	}
-
-	// 결과 방 연출 중 서버 관전 전환(ClientSetViewTarget) 등이 늦게 도착해도 결과 방 시점 유지
-	if (bShowingResultRoom && ActiveResultRoom.IsValid() && IsLocalController()
-		&& GetViewTarget() != ActiveResultRoom.Get())
-	{
-		SetViewTarget(ActiveResultRoom.Get());
 	}
 }
 
@@ -565,78 +540,33 @@ void ADungeonPlayerController::ClientShowMatchEnd_Implementation(int32 EscapedCo
 		}
 	}
 
-	ShowLocalMatchEnd(Result, RoomType);
+	ShowLocalMatchEnd();
 }
 
-void ADungeonPlayerController::ShowLocalMatchEnd(const FText& ResultMessage, EMatchResultRoomType RoomType)
+void ADungeonPlayerController::ShowLocalMatchEnd()
 {
-	// 정상 엔딩(ClientShowMatchEnd)과 술래 이탈 결과 모드(ShowHostLeftResult)가 같이 쓰는 엔딩 연출:
-	// 결과 방 선택 -> EscapeFadeWidget 암전 -> 완전히 검어지면 HandleMatchEndBlack에서 결과 방으로 시점 전환
-	const FText& Result = ResultMessage;
-
-	// [로비 엔딩] 로비로 돌아갈 수 있으면 여기서는 암전만 하고, 완전히 검어지면 로비로 이동 (HandleMatchEndBlack).
+	// [로비 엔딩] 여기서는 암전만 하고, 완전히 검어지면(HandleMatchEndBlack) 로비로 이동.
 	// 결과 방 연출은 로비 맵에서 AStartScreenController가 저장된 결과로 재생함 -> 술래 PC(리슨서버)가 먼저 꺼져도 엔딩이 안 끊김
-	const FString LobbyAddress = ResolveLobbyAddress();
-	if (!LobbyAddress.IsEmpty() && !UEscapeRoomSessionSubsystem::IsHostLeftResultWorld(GetWorld()))
+	PendingLobbyTravelAddress = ResolveLobbyAddress();
+	bTravelToLobbyOnMatchEndBlack = !PendingLobbyTravelAddress.IsEmpty();
+	if (!bTravelToLobbyOnMatchEndBlack)
 	{
-		bTravelToLobbyOnMatchEndBlack = true;
-		PendingLobbyTravelAddress = LobbyAddress;
-
-		if (UEscapeFadeWidget* Widget = EnsureEscapeFadeWidget())
-		{
-			Widget->OnMatchEndBlack.RemoveAll(this);
-			Widget->OnMatchEndBlack.AddUObject(this, &ADungeonPlayerController::HandleMatchEndBlack);
-			// 암전만 (문구/버튼 없음). 완전히 검어진 순간 OnMatchEndBlack -> 로비 이동, 이후로도 검은 화면 유지
-			// (서버 주소로 이동할 땐 접속이 끝날 때까지 GameLV가 계속 돌아가므로, 다시 열리면 안 됨)
-			Widget->StartFadeToBlackOnly();
-		}
-		else
-		{
-			TravelToLobbyForResult(); // 위젯이 없으면 연출 없이 바로 이동
-		}
-		return;
-	}
-
-	// ---- 로비 주소가 없을 때(PIE 테스트 등): 예전처럼 GameLV 안의 결과 방에서 엔딩 ----
-	AResultRoomActor* Room = AResultRoomActor::FindRoom(this, RoomType);
-	ActiveResultRoom = Room;
-	if (!Room)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[MatchEnd] 결과 방(RoomType=%d)이 레벨에 없음 - 검은 화면 결과로 대체"), (int32)RoomType);
+		// 로비 주소가 없음(PIE로 GameLV를 바로 실행 등) - 돌아갈 곳이 없으니 암전만 하고 끝
+		UE_LOG(LogTemp, Warning, TEXT("[MatchEnd] 로비 주소가 없어서 암전만 함 (엔딩은 로비에서만 재생)"));
 	}
 
 	if (UEscapeFadeWidget* Widget = EnsureEscapeFadeWidget())
 	{
 		Widget->OnMatchEndBlack.RemoveAll(this);
 		Widget->OnMatchEndBlack.AddUObject(this, &ADungeonPlayerController::HandleMatchEndBlack);
-		Widget->StartMatchEndFade(Result,
-			Room ? Room->ResultTitle : FText::GetEmpty(),
-			Room ? Room->ResultTitleColor : FLinearColor::White,
-			Room != nullptr);
+		// 암전만 (문구/버튼 없음). 완전히 검어진 순간 OnMatchEndBlack -> 로비 이동, 이후로도 검은 화면 유지
+		// (서버 주소로 이동할 땐 접속이 끝날 때까지 GameLV가 계속 돌아가므로, 다시 열리면 안 됨)
+		Widget->StartFadeToBlackOnly();
 	}
 	else
 	{
-		UE_LOG(LogTemp, Error, TEXT("[MatchEnd] EscapeFadeWidgetClass가 비어있어 게임 종료 화면을 띄울 수 없음"));
+		TravelToLobbyForResult(); // 위젯이 없으면 연출 없이 바로 이동 (주소가 없으면 아무것도 안 함)
 	}
-}
-
-void ADungeonPlayerController::ShowHostLeftResult()
-{
-	// 매치 중에 저장해둔 내 캐릭터 외형 (이 컨트롤러는 새로 만들어진 거라 CachedResultMesh가 비어있음)
-	if (const UGameInstance* GI = GetGameInstance())
-	{
-		if (const UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
-		{
-			CachedResultMesh = Session->GetResultMesh();
-			CachedResultMaterials = Session->GetResultMaterials();
-		}
-	}
-
-	SetIgnoreMoveInput(true);
-	SetIgnoreLookInput(true);
-
-	UE_LOG(LogTemp, Log, TEXT("[MatchEnd] Host-left result mode: showing RunnerWin (mesh=%s)"), *GetNameSafe(CachedResultMesh));
-	ShowLocalMatchEnd(HostLeftResultMessage, EMatchResultRoomType::RunnerWin);
 }
 
 void ADungeonPlayerController::HandleMatchEndBlack()
@@ -645,30 +575,7 @@ void ADungeonPlayerController::HandleMatchEndBlack()
 	if (bTravelToLobbyOnMatchEndBlack)
 	{
 		TravelToLobbyForResult();
-		return;
 	}
-
-	AResultRoomActor* Room = ActiveResultRoom.Get();
-	if (!Room)
-	{
-		return;
-	}
-
-	// 관전 관련 로컬 처리 정리 (관전 대상 메시 숨김 복구, 폴링 타이머 정지)
-	GetWorldTimerManager().ClearTimer(LocalSpectateVisualTimer);
-	RestoreLocallyHiddenSpectateMesh();
-	bLocalSpectateInputEnabled = false;
-
-	// 결과 방에 매치 HUD가 겹치지 않게 숨김
-	if (MatchWidget)
-	{
-		MatchWidget->SetVisibility(ESlateVisibility::Collapsed);
-	}
-
-	// 내가 플레이한 캐릭터 외형으로 교체 + 루프 애니 재생 -> 화면이 검은 지금 시점 전환 (컷이 안 보임)
-	Room->ApplyCharacter(CachedResultMesh, CachedResultMaterials);
-	bShowingResultRoom = true;
-	SetViewTarget(Room);
 }
 
 void ADungeonPlayerController::CacheResultCharacter(APawn* P)
@@ -692,21 +599,21 @@ void ADungeonPlayerController::CacheResultCharacter(APawn* P)
 		return;
 	}
 
-	CachedResultMesh = MeshComp->GetSkeletalMeshAsset();
-	CachedResultMaterials.Reset();
+	USkeletalMesh* Mesh = MeshComp->GetSkeletalMeshAsset();
+	TArray<TObjectPtr<UMaterialInterface>> Materials;
 	for (int32 i = 0; i < MeshComp->GetNumMaterials(); ++i)
 	{
-		CachedResultMaterials.Add(MeshComp->GetMaterial(i));
+		Materials.Add(MeshComp->GetMaterial(i));
 	}
 	UE_LOG(LogTemp, Log, TEXT("[MatchEnd] Cached result character: %s (%d materials)"),
-		*GetNameSafe(CachedResultMesh), CachedResultMaterials.Num());
+		*GetNameSafe(Mesh), Materials.Num());
 
-	// [리슨] 술래 이탈로 튕기면 이 컨트롤러가 사라지므로 GameInstance 쪽에도 저장 (결과 모드에서 꺼내 씀)
+	// 로비로 옮겨가면 이 컨트롤러는 사라지므로 GameInstance 쪽에 저장 (로비 결과 방에서 꺼내 씀)
 	if (UGameInstance* GI = GetGameInstance())
 	{
 		if (UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
 		{
-			Session->SetResultCharacter(CachedResultMesh, CachedResultMaterials);
+			Session->SetResultCharacter(Mesh, Materials);
 		}
 	}
 }
@@ -731,12 +638,6 @@ void ADungeonPlayerController::ReturnToLobby()
 		{
 			// 스스로 나가는 것이므로 이후 연결 끊김은 "술래 이탈"로 보지 않음
 			Session->EndMatch();
-
-			// [로비 엔딩] GameLV 안에서 이미 결과 방을 본 경우(로비 주소 없는 PIE 등)엔 로비에서 엔딩을 또 틀지 않게 비움
-			if (bShowingResultRoom)
-			{
-				Session->ClearPendingMatchResult();
-			}
 		}
 	}
 

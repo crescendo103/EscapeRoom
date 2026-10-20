@@ -210,12 +210,6 @@ void AescaperoomGameMode::InitGame(const FString& MapName, const FString& Option
 	// [리슨] 술래 PC: OpenLevel("GameLV", "listen?ExpectedPlayers=N?PName=...")
 	ExpectedPlayers = UGameplayStatics::GetIntOption(Options, TEXT("ExpectedPlayers"), 0);
 
-	// [데디 시절 호환] 매치 서버를 실행 인자 -ExpectedPlayers=N 로 띄운 경우
-	if (ExpectedPlayers <= 0 && IsNetMode(NM_DedicatedServer))
-	{
-		FParse::Value(FCommandLine::Get(), TEXT("ExpectedPlayers="), ExpectedPlayers);
-	}
-
 	UE_LOG(LogTemp, Log, TEXT("[MatchStart] NetMode=%d ExpectedPlayers=%d (0 = no waiting)"), (int32)GetNetMode(), ExpectedPlayers);
 	if (IsNetMode(NM_ListenServer) && GetWorld())
 	{
@@ -380,22 +374,6 @@ void AescaperoomGameMode::Logout(AController* Exiting)
 	}
 
 	Super::Logout(Exiting);
-
-	// [리슨] 술래 PC(리슨서버)에서 러너가 나간 경우 - 호스트는 남아있으니 아무것도 안 함.
-	// 매치 도중 나간 러너 처리는 기존 게임 로직 그대로
-	if (!IsNetMode(NM_DedicatedServer))
-	{
-		return;
-	}
-
-	FTimerHandle CheckEmptyHandle;
-	GetWorldTimerManager().SetTimer(CheckEmptyHandle, [this]()
-	{
-		if (GameState && GameState->PlayerArray.Num() == 0)
-		{
-			FPlatformMisc::RequestExit(false);
-		}
-	}, 0.2f, false);
 }
 
 // =========================== 시작지점 ===========================

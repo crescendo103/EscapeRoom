@@ -8,7 +8,6 @@ class APropSpawnManagerActor;
 class ULoadingScreenWidget;
 class UMatchWidget;
 class UEscapeFadeWidget;
-class AResultRoomActor;
 class USkeletalMesh;
 class UMaterialInterface;
 class UInputAction;
@@ -101,8 +100,6 @@ public:
 
 	// 예비 로비 주소 ("호스트:포트") - 로비를 거치지 않고 PIE로 바로 매치에 들어온 경우 등 메모가 없을 때만 사용.
 	// [AWS] EC2로 옮길 때는 이 값을 EC2 공인 IP(탄력적 IP 권장):로비포트로 바꿔둘 것 (BP Class Defaults에서 변경 가능)
-	// [로컬 테스트 시절 - AWS 전환으로 주석처리]
-	// FString LobbyServerAddress = TEXT("127.0.0.1:7777");
 	// [AWS] 비워두면 DefaultGame.ini의 로비 주소(UEscapeRoomSessionSubsystem::GetConfiguredLobbyAddress)를 씀
 	UPROPERTY(EditDefaultsOnly, Category = "Escape|Lobby")
 	FString LobbyServerAddress;
@@ -116,10 +113,6 @@ public:
 	// {2}(전체 러너 수)는 엔딩 화면에 안 띄우기로 해서 형식에서 뺌 - 인자는 그대로 넘어오지만 안 쓰이면 무시됨
 	UPROPERTY(EditDefaultsOnly, Category = "Escape|UI")
 	FText MatchResultFormat = NSLOCTEXT("MatchEnd", "Result", "Escaped {0}  :  Caught {1}");
-
-	// [리슨] 술래(호스트)가 매치 도중 나갔을 때 결과 문구 (결과 방 제목은 RunnerWin 방의 ResultTitle 그대로)
-	UPROPERTY(EditDefaultsOnly, Category = "Escape|UI")
-	FText HostLeftResultMessage = NSLOCTEXT("MatchEnd", "HostLeft", "The chaser left the game");
 
 	// 본인 클라 -> 서버: 다음 관전 대상으로 전환 (탈출한 플레이어만 허용)
 	UFUNCTION(Server, Reliable)
@@ -234,35 +227,17 @@ private:
 
 	void HandleEscapeFadeOutFinished();
 
-	// ---- 게임 종료 결과 방 연출 (로컬 전용) ----
-	// 빙의 시점(AcknowledgePossession)에 내 캐릭터 외형을 저장 - 탈출 후 폰이 사라져도 결과 방에서 쓸 수 있게
-	UPROPERTY()
-	TObjectPtr<USkeletalMesh> CachedResultMesh;
-
-	UPROPERTY()
-	TArray<TObjectPtr<UMaterialInterface>> CachedResultMaterials;
-
+	// ---- [로비 엔딩] 게임 종료 -> 암전 -> 로비 이동 (결과 방 연출은 로비 맵에서 재생) ----
+	// 빙의 시점(AcknowledgePossession)에 내 캐릭터 외형을 GameInstance(UEscapeRoomSessionSubsystem)에 저장 - 로비 결과 방에서 씀
 	void CacheResultCharacter(APawn* P);
 
-	// 이번 판 결과에 맞는 방 (ClientShowMatchEnd에서 결정)
-	TWeakObjectPtr<AResultRoomActor> ActiveResultRoom;
-
-	// 결과 방을 보여주는 중인지 - 엔진/관전 로직이 시점을 다른 데로 옮겨도 결과 방으로 되돌림
-	bool bShowingResultRoom = false;
-
-	// EscapeFadeWidget이 게임 종료 암전을 끝낸 순간 - 메시 교체 + 결과 방 카메라로 전환
+	// EscapeFadeWidget이 게임 종료 암전을 끝낸 순간 - 로비로 이동
 	void HandleMatchEndBlack();
 
-	// 엔딩 연출 공통부: 결과 방 선택 + EscapeFadeWidget 게임 종료 화면 (정상 엔딩 / 술래 이탈 결과 모드 공용)
-	void ShowLocalMatchEnd(const FText& ResultMessage, EMatchResultRoomType RoomType);
+	// 게임 종료 암전 시작 (완전히 검어지면 HandleMatchEndBlack -> 로비 이동)
+	void ShowLocalMatchEnd();
 
-	// [리슨] 술래 이탈 결과 모드(GameLV?HostLeftResult, 혼자 모드): 저장해둔 내 외형으로 러너 승리 엔딩
-	// [로비 엔딩] 술래 이탈 엔딩도 이제 로비에서 재생하므로 이 경로는 더 이상 쓰이지 않음 (호환용으로만 남김)
-	void ShowHostLeftResult();
-
-	// ---- [로비 엔딩] 결과 방 연출을 로비 맵에서 재생 ----
-	// 게임 종료 암전이 끝나면(HandleMatchEndBlack) 결과 방 대신 로비로 이동할지.
-	// 로비 주소가 없을 때(PIE로 GameLV를 바로 실행 등)는 false -> 예전처럼 GameLV 안에서 결과 방을 보여줌
+	// 암전이 끝나면 로비로 이동할지. 로비 주소가 없으면(PIE로 GameLV를 바로 실행 등) false -> 암전만 하고 끝
 	bool bTravelToLobbyOnMatchEndBlack = false;
 
 	// 로딩 화면 등 로컬 UI 초기화 (BeginPlay 또는 ReceivedPlayer 중 LocalPlayer가 붙은 쪽에서 1회)

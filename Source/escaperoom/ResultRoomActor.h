@@ -1,8 +1,8 @@
 // ResultRoomActor.h
 //
-// [설계 메모] 게임 종료 결과 연출용 "무대". 레벨(GameLV)의 던전 영역 밖에 4개를 배치해 두고
+// [설계 메모] 게임 종료 결과 연출용 "무대". 로비 맵(LovyLv)에 4개를 배치해 두고
 // (RoomType: 러너 승/패, 술래 승/패), 게임이 끝나면 각 클라가 자기 결과에 맞는 방을 골라
-//   1) CharacterMesh를 "내가 플레이한 캐릭터" 메시로 교체 (ADungeonPlayerController가 빙의 시점에 저장해둔 것)
+//   1) CharacterMesh를 "내가 플레이한 캐릭터" 메시로 교체 (ADungeonPlayerController가 빙의 시점에 GameInstance에 저장해둔 것)
 //   2) LoopAnimation(제자리 걷기 등)을 루프 재생
 //   3) 카메라를 이 액터(= 안의 ResultCamera)로 전환
 // 하는 방식으로 쓴다. 전부 로컬(내 화면) 전용이라 복제하지 않는다 - 같은 방을 여러 명이 동시에 봐도

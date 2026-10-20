@@ -57,11 +57,5 @@ private:
 
 	TMap<int32, FTimerHandle> RoomCountdownTimers;
 
-	// ===== [데디 매치 서버 시절 - 리슨 전환으로 삭제] =====
-	// int32 LaunchMatchServerProcess(int32 RoomId);   // 로비 EC2에서 방마다 매치 서버 프로세스 실행
-	// int32 AcquireFreeMatchPort();                    // 프로세스가 끝난 포트 재사용
-	// FString GetPublicAddressForClients() const;      // -PublicIP= 로 EC2 공인 IP 받기
-	// TMap<int32, FProcHandle> PortProcesses;          // 포트 -> 매치 서버 프로세스
-
 	int32 NextRoomId = 0;
 };

@@ -92,7 +92,6 @@ void AWFCGridManager::BeginPlay()
 		UE_LOG(LogTemp, Error, TEXT("[WFC TickDiag] Tick function was NOT registered! Registering now."));
 		PrimaryActorTick.RegisterTickFunction(GetLevel());
 	}
-	//SetActorTickEnabled(true);
 
 	UE_LOG(LogTemp, Warning, TEXT("[WFC TickDiag] AFTER force: bCanEverTick=%d bStartWithTickEnabled=%d IsTickFunctionRegistered=%d IsActorTickEnabled=%d"),
 		PrimaryActorTick.bCanEverTick, PrimaryActorTick.bStartWithTickEnabled, PrimaryActorTick.IsTickFunctionRegistered(), IsActorTickEnabled());
@@ -111,17 +110,6 @@ void AWFCGridManager::BeginPlay()
 	// 서버(Host)에서만 맵을 생성
 	if (HasAuthority())
 	{
-		// [Match server] Launched by the lobby with -ExpectedPlayers=N: do NOT auto-generate here.
-		// AescaperoomGameMode::PostLogin calls TryGenerateMap() once every player has joined,
-		// so clients actually see the loading bar fill up. PIE/editor keeps the old auto-generate path.
-		// [Listen] Host-left result mode (GameLV reopened standalone with ?HostLeftResult): the runner only
-		// watches the existing result-room ending, so never generate the map here.
-		if (UEscapeRoomSessionSubsystem::IsHostLeftResultWorld(GetWorld()))
-		{
-			UE_LOG(LogTemp, Warning, TEXT("[WFC] Host-left result mode: skipping map generation"));
-			return;
-		}
-
 		// [Listen] The chaser's PC hosts GameLV as a listen server with ?ExpectedPlayers=N in the map URL.
 		// The GameMode parses it in InitGame (runs before actor BeginPlay) and triggers TryGenerateMap()
 		// itself once everyone has joined - so skip auto-generation here while it is waiting.

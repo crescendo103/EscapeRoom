@@ -87,8 +87,7 @@ protected:
 	// 제한시간 종료 -> HandleAllRunnersResolved()와 동일한 결과 집계 + 종료 화면
 	void HandleMatchTimeUp();
 
-	// [데디 매치 서버일 때만] 전원이 나가면 프로세스 종료.
-	// [리슨] 술래 PC에서는 절대 종료하면 안 됨(호스트 본인 게임이 꺼짐) -> NM_DedicatedServer일 때만 동작
+	// 판 도중 나간 러너를 남은 러너 수에서 뺌
 	virtual void Logout(AController* Exiting) override;
 
 	// 플레이어가 접속을 완료할 때마다 호출됨(서버 전용). 술래는 항상 1명 고정이므로,
@@ -139,7 +138,7 @@ protected:
 
 	// ===== 맵 생성 시작 시점 =====
 	// [리슨] 술래가 연 맵 URL의 ?ExpectedPlayers=N (술래 포함 방 인원). 0이면(에디터 PIE 등) 대기하지 않고
-	// WFCGridManager가 BeginPlay에서 예전처럼 바로 생성한다. (데디 시절엔 -ExpectedPlayers= 실행 인자)
+	// WFCGridManager가 BeginPlay에서 예전처럼 바로 생성한다.
 	int32 ExpectedPlayers = 0;
 
 	// 첫 플레이어 접속 후 이 시간(초)이 지나도 인원이 다 안 모이면 있는 인원으로 생성 시작 (이동 중 튕긴 사람 대비)
