@@ -82,6 +82,12 @@ float AMiscActor::GetInteractHoldTime_Implementation(APawn* Interactor)
 
 void AMiscActor::OnInteractHoldUpdate_Implementation(APawn* Interactor, bool bHolding)
 {
+	// 서버 권한에서만 처리. 서브클래스(Door/Exit)의 OnInteractHoldUpdateInternal은 이 체크를 전제로 작성됨
+	if (!HasAuthority())
+	{
+		return;
+	}
+
 	OnInteractHoldUpdateInternal(Interactor, bHolding);
 }
 
