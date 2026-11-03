@@ -781,8 +781,8 @@ void AWFCGridManager::SpawnOneDoor(int32 i)
 		return;
 	}
 
-	// ADoorActor는 APawn 계열이라 기본값이 "겹치면 스폰 취소"임.
-	// 문은 벽 구멍(문틀)과 항상 겹치므로 AlwaysSpawn으로 강제해야 한다 (안 그러면 대부분 스폰 실패)
+	// ADoorActor??APawn 계열?�라 기본값이 "겹치�??�폰 취소"??
+	// 문�? �?구멍(문�?)�???�� 겹치므�?AlwaysSpawn?�로 강제?�야 ?�다 (??그러�??�부�??�폰 ?�패)
 	FActorSpawnParameters DoorSpawnParams;
 	DoorSpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	AActor* Door = GetWorld()->SpawnActor<AActor>(DoorActorClass, PendingDoorTransforms[i], DoorSpawnParams);
@@ -813,9 +813,7 @@ void AWFCGridManager::GenerateMap()
 
 	UE_LOG(LogTemp, Warning, TEXT("[WFC Debug] 2. AllTiles Count: %d"), AllTiles.Num());
 
-	InitCells();
-	UE_LOG(LogTemp, Warning, TEXT("[WFC Debug] 3. Cells Initialized. Count: %d"), Cells.Num());
-
+	InitCells();	
 	PlaceBigRooms();
 	SeedBigRoomCells();
 

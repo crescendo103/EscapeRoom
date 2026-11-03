@@ -161,8 +161,7 @@ void ADoorActor::ShatterBrokenMesh()
 }
 
 void ADoorActor::OnRep_IsOpen()
-{
-	// �μ��� �ڿ� ���� ���� ������ �ڴʰ� �͵� �ı� ������ ����� �ʵ��� ���
+{	
 	if (bIsBroken) return;
 	OnDoorOpenChanged(bIsOpen);
 }
@@ -226,7 +225,6 @@ void ADoorActor::SpawnKickImpactEffect()
 void ADoorActor::OnRep_IsBroken()
 {
 	if (!bIsBroken) return;
-	ActivateBrokenMesh();
-	// �ݸ���/��ȣ�ۿ� ���� ��Ȱ��ȭ �� �߰� ������ ������ ��������Ʈ���� ����
+	ActivateBrokenMesh();	
 	OnDoorBroken();
 }

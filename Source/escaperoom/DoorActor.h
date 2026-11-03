@@ -152,11 +152,9 @@ public:
 	TObjectPtr<UNiagaraSystem> KickImpactNiagaraEffect;
 
 protected:
-	// ������ ������ ������ ���°� - �ٲ� ������ �����ϴ� OnRep�� Ŭ���̾�Ʈ���� �ڵ� ȣ���
 	UPROPERTY(ReplicatedUsing = OnRep_IsOpen, BlueprintReadOnly, Category = "WFC", VisibleAnywhere)
 	bool bIsOpen = true; // 시작 시 열린 상태. BP_Door2에서 RotationPivot Yaw 90 + BeginPlay에서 DoorOpen Set New Time(끝)으로 모양을 맞춰줌
-
-	// �� �� true�� �Ǹ� ���ķδ� ���� false�� �ǵ��ư��� ���� (���� �ı��� ���� ����)
+		
 	UPROPERTY(ReplicatedUsing = OnRep_IsBroken, BlueprintReadOnly, Category = "WFC", VisibleAnywhere)
 	bool bIsBroken = false;
 };
