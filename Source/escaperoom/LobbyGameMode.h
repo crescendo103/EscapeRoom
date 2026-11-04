@@ -53,7 +53,8 @@ private:
 	int32 NextMatchPortOffset = 0;
 
 	// 술래에게 호스트 지시 후 러너를 보내기까지 기다리는 시간 (술래 PC가 GameLV를 로드하고 리슨을 열 때까지)
-	static constexpr float MatchHostBootDelaySeconds = 8.f;
+	// [EOS] P2P 리슨 준비 + 중계 연결 시간을 고려해 8초 -> 12초
+	static constexpr float MatchHostBootDelaySeconds = 12.f;
 
 	TMap<int32, FTimerHandle> RoomCountdownTimers;
 

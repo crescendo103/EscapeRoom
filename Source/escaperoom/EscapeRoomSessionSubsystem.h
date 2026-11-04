@@ -29,6 +29,7 @@ class UNetDriver;
 class SWidget;
 class USkeletalMesh;
 class UMaterialInterface;
+class FUniqueNetId;
 enum class EMatchResultRoomType : uint8; // ResultRoomActor.h
 
 // 매치 접속이 끊긴 뒤 시작 맵(LovyLv)에서 처리할 일
@@ -79,6 +80,22 @@ public:
 	// 게임 실행 후 로비 자동 접속을 이미 시도했는지. 접속 실패로 시작 맵이 다시 열려도
 	// 무한 재접속하지 않게 한 번만 시도함
 	bool bTriedAutoConnect = false;
+
+	// ---------------- [EOS] P2P 로그인 ----------------
+	// 술래 PC(리슨서버)는 집 공유기(NAT) 뒤에 있어서 러너가 IP로 직접 접속할 수 없음 ->
+	// EOS(Epic Online Services) P2P를 사용. EIK NetDriver가 NAT 뚫기를 시도하고, 실패하면 Epic 중계 서버로 연결해줌.
+	// 계정 없이 이 PC 전용 익명 계정(Device ID)으로 로그인 -> 내 Product User ID(PUID)로
+	// "EOS:<PUID>:GameNetDriver:<채널>" 주소를 만들어 로비 서버에 등록해 둠 (술래로 뽑히면 이 주소로 러너들이 접속)
+	DECLARE_DELEGATE_OneParam(FOnEOSLoginFinished, bool /*bLoggedIn*/);
+
+	// 로그인 시작. 이미 로그인돼 있으면 바로 성공 콜백. 실패/타임아웃이어도 콜백은 반드시 한 번 불림
+	// -> 호출 쪽은 결과와 상관없이 로비 접속을 이어가면 됨 (EOS가 안 되면 로비가 기존 IP 방식으로 매치를 연결)
+	void LoginEOS(FOnEOSLoginFinished OnFinished);
+
+	bool IsEOSLoggedIn() const { return !EOSMatchAddress.IsEmpty(); }
+
+	// 내가 술래가 됐을 때 러너들이 접속할 주소. 로그인 전이면 빈 문자열
+	const FString& GetEOSMatchAddress() const { return EOSMatchAddress; }
 
 	// ---------------- 매치 상태 ----------------
 	// 로비를 떠나 매치로 갈 때 호출 (러너: 술래 PC 접속 직전 / 술래: 리슨서버 열기 직전)
@@ -146,6 +163,22 @@ private:
 
 	UPROPERTY()
 	TArray<TObjectPtr<UMaterialInterface>> ResultMaterials;
+
+	// ---- [EOS] ----
+	FString EOSMatchAddress;
+	bool bEOSLoginInProgress = false;
+	TArray<FOnEOSLoginFinished> PendingEOSLoginCallbacks;
+	FDelegateHandle EOSLoginCompleteHandle;
+	FTimerHandle EOSLoginTimeoutHandle;
+
+	// Epic 서버가 응답하지 않을 때(네트워크 차단 등) 로비 접속이 무한정 막히지 않게 하는 상한
+	static constexpr float EOSLoginTimeoutSeconds = 15.f;
+
+	void HandleEOSLoginComplete(int32 LocalUserNum, bool bWasSuccessful, const FUniqueNetId& UserId, const FString& Error);
+	void FinishEOSLogin(bool bSuccess);
+
+	// EIK NetDriver와 같은 규칙으로 리슨 소켓 주소를 만듦 (자세한 설명은 cpp)
+	static FString MakeEOSMatchAddress(const FString& ProductUserId);
 
 	FDelegateHandle NetworkFailureHandle;
 	FDelegateHandle TravelFailureHandle;

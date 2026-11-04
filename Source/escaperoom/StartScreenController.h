@@ -69,6 +69,10 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_SetReady(bool bReady);
 
+	// [EOS] 클라 -> 로비 서버: 내가 술래가 됐을 때 러너들이 접속할 EOS P2P 주소 등록 (로비 접속 직후 1회)
+	UFUNCTION(Server, Reliable)
+	void Server_RegisterEOSAddress(const FString& EOSAddress);
+
 	// [리슨] 로비 서버 -> 러너들: 술래 PC(리슨서버)로 접속해라
 	UFUNCTION(Client, Reliable)
 	void Client_ConnectToMatch(const FString& ServerAddress);
@@ -76,8 +80,9 @@ public:
 	// [리슨] 로비 서버 -> 랜덤으로 뽑힌 술래: 내 PC에서 GameLV를 리슨서버로 열어라.
 	// Port: 리슨 포트 (같은 PC에서 로비+매치를 같이 테스트할 때 안 겹치게 로비가 정해줌)
 	// ExpectedPlayers: 술래 포함 방 인원 - 다 모이면 맵 생성 시작 (AescaperoomGameMode::CheckAllPlayersJoined)
+	// bUseEOSP2P: [EOS] true면 EOS P2P로 리슨(러너들이 EOS 주소로 접속), false면 기존 IP:Port로 리슨
 	UFUNCTION(Client, Reliable)
-	void Client_HostMatch(int32 Port, int32 ExpectedPlayers);
+	void Client_HostMatch(int32 Port, int32 ExpectedPlayers, bool bUseEOSP2P);
 
 	// 매치 레벨 이름 (OpenLevel에 그대로 넘김)
 	UPROPERTY(EditDefaultsOnly, Category = "Match")

@@ -7,6 +7,7 @@
 #include "EscapeFadeWidget.h"
 #include "MatchPlayerState.h"
 #include "escaperoomCharacter.h"
+#include "MatchIntroComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputAction.h"
@@ -222,19 +223,90 @@ void ADungeonPlayerController::FinishLoading()
 		LoadingWidget = nullptr;
 	}
 
-	// 2. 입력 모드를 GameOnly로 복원하고 마우스 커서를 숨김
+	// 2. 입력 모드를 GameOnly로 복원하고 마우스 커서를 숨김 (연출 중에도 커서가 보이지 않게 여기서 먼저)
 	FInputModeGameOnly InputMode;
 	SetInputMode(InputMode);
 	bShowMouseCursor = false;
 
-	// 3. 캐릭터 입력 활성화 (SetIgnoreMoveInput이 걸려있던 경우 대비)
+	// 3. [시작 연출] 내 캐릭터 주위를 비추는 연출 -> 끝나면 StartMatchPlay (입력 허용 / HUD / 배경음악)
+	TryStartMatchIntro();
+}
+
+// =========================== 시작 연출 ===========================
+
+void ADungeonPlayerController::TryStartMatchIntro()
+{
+	if (bMatchIntroHandled || !bLoadingFinished)
+	{
+		return;
+	}
+
+	APawn* MyPawn = GetPawn();
+	if (!MyPawn || Cast<ACabinetActor>(MyPawn))
+	{
+		// 아직 내 캐릭터가 복제되지 않음 -> AcknowledgePossession에서 다시 시도.
+		// 끝내 안 오면(스폰 실패 등) 연출 없이 게임을 시작해서 화면이 멈춰 있지 않게
+		if (!GetWorldTimerManager().IsTimerActive(MatchIntroPawnWaitTimer))
+		{
+			GetWorldTimerManager().SetTimer(MatchIntroPawnWaitTimer, FTimerDelegate::CreateWeakLambda(this, [this]()
+			{
+				if (!bMatchIntroHandled)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("[Intro] No pawn after %.0fs - starting without intro"), MatchIntroPawnWaitSeconds);
+					bMatchIntroHandled = true;
+					StartMatchPlay();
+				}
+			}), MatchIntroPawnWaitSeconds, false);
+		}
+		return;
+	}
+
+	bMatchIntroHandled = true;
+	GetWorldTimerManager().ClearTimer(MatchIntroPawnWaitTimer);
+
+	UMatchIntroComponent* Intro = MyPawn->FindComponentByClass<UMatchIntroComponent>();
+	if (!Intro || !Intro->IsIntroEnabled())
+	{
+		StartMatchPlay(); // 연출이 없는 캐릭터 -> 바로 시작
+		return;
+	}
+
+	// 연출 중에는 조작 불가 (이동/시점 + 상호작용 등 캐릭터 입력 전부)
+	SetIgnoreMoveInput(true);
+	SetIgnoreLookInput(true);
+	MyPawn->DisableInput(this);
+	MatchIntroPawn = MyPawn;
+
+	Intro->Play(FSimpleDelegate::CreateUObject(this, &ADungeonPlayerController::HandleMatchIntroFinished));
+}
+
+void ADungeonPlayerController::HandleMatchIntroFinished()
+{
+	if (APawn* IntroPawn = MatchIntroPawn.Get())
+	{
+		IntroPawn->EnableInput(this);
+	}
+	MatchIntroPawn.Reset();
+
+	StartMatchPlay();
+}
+
+void ADungeonPlayerController::StartMatchPlay()
+{
+	if (bMatchPlayStarted)
+	{
+		return;
+	}
+	bMatchPlayStarted = true;
+
+	// 1. 캐릭터 입력 활성화 (연출 중 막아둔 것 / SetIgnoreMoveInput이 걸려있던 경우 대비)
 	SetIgnoreMoveInput(false);
 	SetIgnoreLookInput(false);
 
-	// 4. 로딩이 끝난 시점에 매치 HUD(러너/주사위/탈출구) 표시 시작
+	// 2. 매치 HUD(러너/주사위/탈출구) 표시 시작
 	ShowMatchWidget();
 
-	// 5. 배경음악 시작
+	// 3. 배경음악 시작
 	StartMatchBGM();
 }
 
@@ -284,6 +356,12 @@ void ADungeonPlayerController::AcknowledgePossession(APawn* P)
 
 	// 러너/술래 폰에 빙의된 순간 내 외형 저장 (결과 방 연출용)
 	CacheResultCharacter(P);
+
+	// [시작 연출] 로딩이 먼저 끝나서 캐릭터를 기다리던 중이면 지금 시작
+	if (bLoadingFinished && !bMatchIntroHandled)
+	{
+		TryStartMatchIntro();
+	}
 
 	for (TActorIterator<ACabinetActor> It(GetWorld()); It; ++It)
 	{

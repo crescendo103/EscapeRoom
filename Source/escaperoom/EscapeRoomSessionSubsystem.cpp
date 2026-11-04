@@ -13,6 +13,8 @@
 #include "Styling/CoreStyle.h"
 #include "UObject/UObjectGlobals.h"
 #include "TimerManager.h"
+#include "OnlineSubsystem.h"
+#include "Interfaces/OnlineIdentityInterface.h"
 
 void UEscapeRoomSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -207,4 +209,143 @@ void UEscapeRoomSessionSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 	{
 		AddBlackoutToViewport();
 	}
+}
+
+// ======================== [EOS] P2P 로그인 ========================
+
+void UEscapeRoomSessionSubsystem::LoginEOS(FOnEOSLoginFinished OnFinished)
+{
+	if (IsEOSLoggedIn())
+	{
+		OnFinished.ExecuteIfBound(true);
+		return;
+	}
+
+	// 로비 데디서버는 EOS를 쓰지 않음 (EIK NetDriver도 데디서버에선 항상 IP 방식으로 동작)
+	if (IsRunningDedicatedServer())
+	{
+		OnFinished.ExecuteIfBound(false);
+		return;
+	}
+
+	PendingEOSLoginCallbacks.Add(MoveTemp(OnFinished));
+	if (bEOSLoginInProgress)
+	{
+		return; // 이미 진행 중 - 끝나면 같이 불림
+	}
+
+	IOnlineSubsystem* OSS = IOnlineSubsystem::Get(TEXT("EIK"));
+	IOnlineIdentityPtr Identity;
+	if (OSS)
+	{
+		Identity = OSS->GetIdentityInterface();
+	}
+	if (!Identity.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[EOS] EIK online subsystem is not available - continuing without EOS (IP fallback)"));
+		FinishEOSLogin(false);
+		return;
+	}
+
+	// 이미 로그인된 상태면(타임아웃 뒤 늦게 성공한 경우 등) 그 ID로 바로 주소를 만듦
+	if (Identity->GetLoginStatus(0) == ELoginStatus::LoggedIn)
+	{
+		if (FUniqueNetIdPtr ExistingId = Identity->GetUniquePlayerId(0))
+		{
+			HandleEOSLoginComplete(0, true, *ExistingId, FString());
+			return;
+		}
+	}
+
+	bEOSLoginInProgress = true;
+	EOSLoginCompleteHandle = Identity->AddOnLoginCompleteDelegate_Handle(0,
+		FOnLoginCompleteDelegate::CreateUObject(this, &UEscapeRoomSessionSubsystem::HandleEOSLoginComplete));
+
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		GI->GetTimerManager().SetTimer(EOSLoginTimeoutHandle, FTimerDelegate::CreateWeakLambda(this, [this]()
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[EOS] Login timed out after %.0fs - continuing without EOS (IP fallback)"), EOSLoginTimeoutSeconds);
+			FinishEOSLogin(false);
+		}), EOSLoginTimeoutSeconds, false);
+	}
+
+	// EIK 규칙: "noeas_+_<외부 인증 종류>" = Epic 계정(EAS) 없이 Connect 인터페이스로 로그인.
+	// Device ID 계정이 아직 없으면 EIK가 자동으로 만든 뒤 다시 로그인함. Id = 표시 이름(비면 안 됨)
+	FOnlineAccountCredentials Credentials;
+	Credentials.Type = TEXT("noeas_+_EIK_ECT_DEVICEID_ACCESS_TOKEN");
+	Credentials.Id = TEXT("Player");
+	Credentials.Token = FString();
+
+	UE_LOG(LogTemp, Log, TEXT("[EOS] Device ID login start"));
+	if (!Identity->Login(0, Credentials))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[EOS] Login call was rejected - continuing without EOS (IP fallback)"));
+		FinishEOSLogin(false);
+	}
+}
+
+void UEscapeRoomSessionSubsystem::HandleEOSLoginComplete(int32 LocalUserNum, bool bWasSuccessful, const FUniqueNetId& UserId, const FString& Error)
+{
+	if (bWasSuccessful && UserId.IsValid())
+	{
+		// EIK의 FUniqueNetIdEOS::ToString() = "EpicAccountId|PUID", Epic 계정이 없으면(Device ID) PUID만 옴
+		FString ProductUserId = UserId.ToString();
+		FString AfterSeparator;
+		if (ProductUserId.Split(TEXT("|"), nullptr, &AfterSeparator))
+		{
+			ProductUserId = AfterSeparator;
+		}
+
+		if (!ProductUserId.IsEmpty())
+		{
+			EOSMatchAddress = MakeEOSMatchAddress(ProductUserId);
+			UE_LOG(LogTemp, Log, TEXT("[EOS] Login OK. PUID=%s, match address=%s"), *ProductUserId, *EOSMatchAddress);
+			FinishEOSLogin(true);
+			return;
+		}
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[EOS] Login failed (%s) - continuing without EOS (IP fallback)"), *Error);
+	FinishEOSLogin(false);
+}
+
+void UEscapeRoomSessionSubsystem::FinishEOSLogin(bool bSuccess)
+{
+	bEOSLoginInProgress = false;
+
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		GI->GetTimerManager().ClearTimer(EOSLoginTimeoutHandle);
+	}
+
+	if (EOSLoginCompleteHandle.IsValid())
+	{
+		if (IOnlineSubsystem* OSS = IOnlineSubsystem::Get(TEXT("EIK")))
+		{
+			if (IOnlineIdentityPtr Identity = OSS->GetIdentityInterface())
+			{
+				Identity->ClearOnLoginCompleteDelegate_Handle(0, EOSLoginCompleteHandle);
+			}
+		}
+		EOSLoginCompleteHandle.Reset();
+	}
+
+	// 콜백 안에서 맵 이동(ClientTravel)을 하므로, 목록을 먼저 꺼내 비운 뒤 호출
+	TArray<FOnEOSLoginFinished> Callbacks = MoveTemp(PendingEOSLoginCallbacks);
+	PendingEOSLoginCallbacks.Reset();
+	for (FOnEOSLoginFinished& Callback : Callbacks)
+	{
+		Callback.ExecuteIfBound(bSuccess && IsEOSLoggedIn());
+	}
+}
+
+FString UEscapeRoomSessionSubsystem::MakeEOSMatchAddress(const FString& ProductUserId)
+{
+	// EIK NetDriver(UNetDriverEIKBase::InitBase)는 리슨 소켓 이름 = 넷드라이버 이름("GameNetDriver"),
+	// 채널 = 그 이름의 해시를 uint8로 자른 값으로 정함. 러너가 같은 소켓으로 찾아오도록 똑같이 계산해서
+	// "EOS:<PUID>:<소켓 이름>:<채널>" 형식으로 만듦 (FInternetAddrEOS::ToString과 같은 형식)
+	const FString SocketName = TEXT("GameNetDriver");
+	const uint8 Channel = static_cast<uint8>(GetTypeHash(SocketName));
+	return FString::Printf(TEXT("EOS:%s:%s:%u"), *ProductUserId, *SocketName, static_cast<uint32>(Channel));
 }

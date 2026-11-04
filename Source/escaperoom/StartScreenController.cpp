@@ -15,6 +15,7 @@
 #include "Components/AudioComponent.h"
 #include "EscapeFadeWidget.h"
 #include "ResultRoomActor.h"
+#include "EscapeRoomPlayerState.h"
 
 void AStartScreenController::BeginPlay()
 {
@@ -66,11 +67,33 @@ void AStartScreenController::InitLocalLobby()
 			if (!LobbyAddress.IsEmpty())
 			{
 				Session->bTriedAutoConnect = true;
-				UE_LOG(LogTemp, Log, TEXT("[Session] Auto-connecting to lobby server: %s"), *LobbyAddress);
-				ClientTravel(LobbyAddress, TRAVEL_Absolute);
+
+				// [EOS] 로비에 들어가기 전에 EOS 로그인부터 (술래가 됐을 때 러너들이 P2P로 접속할 내 주소를 만들기 위함).
+				// 성공/실패와 상관없이 끝나면 로비로 접속 - 실패하면 로비가 기존 IP 방식으로 매치를 연결함
+				UE_LOG(LogTemp, Log, TEXT("[Session] EOS login before connecting to lobby server: %s"), *LobbyAddress);
+				Session->LoginEOS(UEscapeRoomSessionSubsystem::FOnEOSLoginFinished::CreateWeakLambda(this, [this, LobbyAddress](bool bLoggedIn)
+				{
+					UE_LOG(LogTemp, Log, TEXT("[Session] EOS login %s -> auto-connecting to lobby server: %s"),
+						bLoggedIn ? TEXT("OK") : TEXT("FAILED (IP fallback)"), *LobbyAddress);
+					ClientTravel(LobbyAddress, TRAVEL_Absolute);
+				}));
 				return;
 			}
 			UE_LOG(LogTemp, Warning, TEXT("[Session] 로비 주소 설정이 비어있음 (DefaultGame.ini [EscapeRoom.Network] LobbyAddress 또는 -LobbyAddress=) - 자동 접속 안 함"));
+		}
+	}
+
+	// [EOS] 로비 서버에 접속한 상태면 내 EOS P2P 주소를 등록 (로그인 안 됐으면 등록 안 함 -> 이 방은 IP 방식으로 매치)
+	if (GetNetMode() == NM_Client)
+	{
+		UEscapeRoomSessionSubsystem* Session = GetGameInstance() ? GetGameInstance()->GetSubsystem<UEscapeRoomSessionSubsystem>() : nullptr;
+		if (Session && Session->IsEOSLoggedIn())
+		{
+			Server_RegisterEOSAddress(Session->GetEOSMatchAddress());
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[EOS] Not logged in - matches in this room will use IP (same network only)"));
 		}
 	}
 
@@ -208,6 +231,23 @@ void AStartScreenController::Server_SetReady_Implementation(bool bReady)
 	}
 }
 
+void AStartScreenController::Server_RegisterEOSAddress_Implementation(const FString& EOSAddress)
+{
+	// 이 값은 그대로 다른 플레이어(러너)들의 접속 주소가 되므로 형식만 간단히 검증
+	if (!EOSAddress.StartsWith(TEXT("EOS:")) || EOSAddress.Len() > 128
+		|| EOSAddress.Contains(TEXT("?")) || EOSAddress.Contains(TEXT("/")) || EOSAddress.Contains(TEXT(" ")))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Lobby] Rejected invalid EOS address from %s"), *GetNameSafe(PlayerState));
+		return;
+	}
+
+	if (AEscapeRoomPlayerState* EPS = Cast<AEscapeRoomPlayerState>(PlayerState))
+	{
+		EPS->EOSMatchAddress = EOSAddress;
+		UE_LOG(LogTemp, Log, TEXT("[Lobby] %s registered EOS address %s"), *EPS->GetPlayerName(), *EOSAddress);
+	}
+}
+
 FString AStartScreenController::GetUrlSafePlayerName() const
 {
 	// 매치(술래 PC)는 로비와 다른 서버라 로비의 PlayerState(이름 포함)가 따라가지 않음 ->
@@ -279,7 +319,7 @@ void AStartScreenController::Client_ConnectToMatch_Implementation(const FString&
 	ClientTravel(TravelURL, TRAVEL_Absolute);
 }
 
-void AStartScreenController::Client_HostMatch_Implementation(int32 Port, int32 ExpectedPlayers)
+void AStartScreenController::Client_HostMatch_Implementation(int32 Port, int32 ExpectedPlayers, bool bUseEOSP2P)
 {
 	// [리슨] 술래로 뽑힘: 내 PC에서 GameLV를 리슨서버로 열고 러너들을 기다림.
 	// 로비와의 연결은 여기서 끊김(맵 이동) -> 로비 서버에선 Logout으로 방에서 빠짐
@@ -306,7 +346,15 @@ void AStartScreenController::Client_HostMatch_Implementation(int32 Port, int32 E
 		Options += FString::Printf(TEXT("?PName=%s"), *MyName);
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[Match] I'm the chaser -> hosting %s?%s on port %d"), *MatchLevelName.ToString(), *Options, Port);
+	// [EOS] EIK NetDriver는 EOS에 로그인돼 있으면 기본으로 P2P 리슨을 함. 로비가 IP 방식으로 정한 매치
+	// (방 멤버 중 EOS 로그인이 안 된 사람이 있음)면 러너들이 IP:Port로 오므로 IP 리슨을 강제
+	if (!bUseEOSP2P)
+	{
+		Options += TEXT("?bUseIPSockets");
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[Match] I'm the chaser -> hosting %s?%s (%s, port %d)"),
+		*MatchLevelName.ToString(), *Options, bUseEOSP2P ? TEXT("EOS P2P") : TEXT("IP"), Port);
 	UGameplayStatics::OpenLevel(this, MatchLevelName, true, Options);
 }
 

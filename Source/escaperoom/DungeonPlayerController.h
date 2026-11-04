@@ -203,6 +203,22 @@ private:
 	void HandlePropComplete();
 	void FinishLoading();
 
+	// ---- [시작 연출] 로딩이 끝나면 내 캐릭터의 UMatchIntroComponent 연출 -> 끝나면 StartMatchPlay ----
+	// 내 캐릭터가 아직 복제되지 않았으면 빙의되는 순간(AcknowledgePossession) 다시 시도
+	void TryStartMatchIntro();
+	void HandleMatchIntroFinished();
+
+	// 실제 게임 시작: 입력 허용 + 매치 HUD + 배경음악 (원래 FinishLoading의 2~5단계)
+	void StartMatchPlay();
+
+	bool bMatchIntroHandled = false; // 매치당 1회
+	bool bMatchPlayStarted = false;
+	TWeakObjectPtr<APawn> MatchIntroPawn;
+	FTimerHandle MatchIntroPawnWaitTimer;
+
+	// 로딩이 끝났는데 내 캐릭터가 이 시간 안에 안 오면 연출 없이 시작
+	static constexpr float MatchIntroPawnWaitSeconds = 5.f;
+
 	// HandleGenComplete / FinishLoading 중복 실행 방지 (직접 호출 + 델리게이트로 두 번 들어올 수 있음)
 	bool bGenCompleteHandled = false;
 	bool bLoadingFinished = false;

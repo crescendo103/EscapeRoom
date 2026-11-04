@@ -16,6 +16,10 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_Ready)
 	bool bIsReady = false;
 
+	// [EOS] 이 플레이어가 술래로 뽑혔을 때 러너들이 접속할 P2P 주소 ("EOS:<PUID>:GameNetDriver:<채널>").
+	// 클라가 로비 접속 직후 Server_RegisterEOSAddress로 보냄. 로비 서버에서만 쓰므로 복제하지 않음
+	FString EOSMatchAddress;
+
 	UFUNCTION()
 	void OnRep_RoomId();
 

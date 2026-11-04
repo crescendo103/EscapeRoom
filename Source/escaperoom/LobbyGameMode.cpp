@@ -217,27 +217,50 @@ bool ALobbyGameMode::StartListenMatch(int32 RoomId)
 	AStartScreenController* ChaserPC = Candidates[FMath::RandRange(0, Candidates.Num() - 1)];
 
 	// ---- 2) 러너들이 접속할 술래 주소 (술래가 로비를 떠나기 전에 미리 확보) ----
-	const FString ChaserIP = GetRemoteIPOf(ChaserPC);
-	if (ChaserIP.IsEmpty())
+	// [EOS] 방 멤버 전원이 EOS 로그인(주소 등록)돼 있으면 술래의 EOS P2P 주소를 씀 -> 공유기(NAT) 너머에서도 접속 가능.
+	// 한 명이라도 없으면 기존 방식(로비가 본 술래의 IP + 포트) - 같은 공유기/같은 PC 테스트용
+	const AEscapeRoomPlayerState* ChaserEPS = Cast<AEscapeRoomPlayerState>(ChaserPC->PlayerState);
+	const FString ChaserEOSAddress = ChaserEPS ? ChaserEPS->EOSMatchAddress : FString();
+	const bool bAllMembersHaveEOS = Algo::AllOf(Room->Members, [](const TObjectPtr<APlayerState>& Member)
 	{
-		// 로비 서버 본인(리슨 로비/PIE 호스트)이 뽑히면 NetConnection이 없음 - 로비는 데디로 돌릴 것
-		UE_LOG(LogTemp, Error, TEXT("[Lobby] Room %d: 술래(%s)의 접속 IP를 알 수 없음 - 로비를 데디서버로 실행했는지 확인"),
-			RoomId, *GetNameSafe(ChaserPC->PlayerState));
-		return false;
-	}
+		if (!Member)
+		{
+			return true; // 이미 나간 자리
+		}
+		const AEscapeRoomPlayerState* EPS = Cast<AEscapeRoomPlayerState>(Member.Get());
+		return EPS && !EPS->EOSMatchAddress.IsEmpty();
+	});
+	const bool bUseEOSP2P = bAllMembersHaveEOS && !ChaserEOSAddress.IsEmpty();
 
 	const int32 Port = BasePort + NextMatchPortOffset;
 	NextMatchPortOffset = (NextMatchPortOffset + 1) % MaxMatchPorts;
 
 	const int32 ExpectedPlayers = Room->Members.Num(); // 술래 포함
-	Room->MatchServerAddress = FString::Printf(TEXT("%s:%d"), *ChaserIP, Port);
 
-	UE_LOG(LogTemp, Log, TEXT("[Lobby] Room %d: chaser = %s -> hosting at %s (expected %d players)"),
-		RoomId, *GetNameSafe(ChaserPC->PlayerState), *Room->MatchServerAddress, ExpectedPlayers);
+	if (bUseEOSP2P)
+	{
+		Room->MatchServerAddress = ChaserEOSAddress;
+	}
+	else
+	{
+		const FString ChaserIP = GetRemoteIPOf(ChaserPC);
+		if (ChaserIP.IsEmpty())
+		{
+			// 로비 서버 본인(리슨 로비/PIE 호스트)이 뽑히면 NetConnection이 없음 - 로비는 데디로 돌릴 것
+			UE_LOG(LogTemp, Error, TEXT("[Lobby] Room %d: 술래(%s)의 접속 IP를 알 수 없음 - 로비를 데디서버로 실행했는지 확인"),
+				RoomId, *GetNameSafe(ChaserPC->PlayerState));
+			return false;
+		}
+		Room->MatchServerAddress = FString::Printf(TEXT("%s:%d"), *ChaserIP, Port);
+		UE_LOG(LogTemp, Warning, TEXT("[Lobby] Room %d: not every member is logged in to EOS -> IP fallback (same network only)"), RoomId);
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[Lobby] Room %d: chaser = %s -> hosting at %s (%s, expected %d players)"),
+		RoomId, *GetNameSafe(ChaserPC->PlayerState), *Room->MatchServerAddress, bUseEOSP2P ? TEXT("EOS P2P") : TEXT("IP"), ExpectedPlayers);
 
 	// ---- 3) 술래에게 리슨서버 열라고 지시 (술래는 이 직후 로비를 떠나 Logout -> 방에서 빠짐) ----
 	TWeakObjectPtr<APlayerState> ChaserPS = ChaserPC->PlayerState;
-	ChaserPC->Client_HostMatch(Port, ExpectedPlayers);
+	ChaserPC->Client_HostMatch(Port, ExpectedPlayers, bUseEOSP2P);
 
 	// ---- 4) 술래 PC가 맵을 로드하고 리슨을 열 시간을 준 뒤 러너들을 보냄 ----
 	FTimerHandle DelayHandle;
