@@ -13,9 +13,9 @@ void UStartScreenWidget::GoToCreateJoinRoom()
 	{
 		if (PlayerNameTextBox)
 		{
-			// 붙여넣기 등으로 필터를 우회한 경우 대비해 한 번 더 영문만 남김
+			// 붙여넣기 등으로 필터를 우회한 경우 대비해 한 번 더 영문+숫자만 남김
 			// 앞뒤 공백 제거 (공백만 입력한 경우 빈 이름 -> 기본값 처리)
-			FString Name = LobbyInputFilter::KeepEnglishOnly(PlayerNameTextBox->GetText().ToString()).TrimStartAndEnd();
+			FString Name = LobbyInputFilter::KeepEnglishAndDigits(PlayerNameTextBox->GetText().ToString()).TrimStartAndEnd();
 			if (Name.IsEmpty())
 			{
 				Name = TEXT("Player"); // 기본값 (RequestCreateRoom의 "New Room" 패턴과 동일)
@@ -61,7 +61,7 @@ void UStartScreenWidget::OnHowToClicked()
 
 void UStartScreenWidget::OnPlayerNameChanged(const FText& Text)
 {
-	LobbyInputFilter::Apply(PlayerNameTextBox, Text, &LobbyInputFilter::KeepEnglishOnly);
+	LobbyInputFilter::Apply(PlayerNameTextBox, Text, &LobbyInputFilter::KeepEnglishAndDigits);
 }
 
 void UStartScreenWidget::OnQuitClicked()

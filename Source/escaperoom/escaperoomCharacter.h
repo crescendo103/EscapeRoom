@@ -11,6 +11,7 @@
 class UInputComponent;
 class USkeletalMeshComponent;
 class UCameraComponent;
+class USpringArmComponent;
 class UInputAction;
 class UInputMappingContext;
 class UAudioComponent;
@@ -31,6 +32,11 @@ class AescaperoomCharacter : public ACharacter
 	/** First person camera */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FirstPersonCameraComponent;
+
+	// 3인칭 카메라를 벽 앞으로 밀어주는 스프링암. FirstPersonCamera가 이 끝에 붙어 있음.
+	// 길이/높이는 생성자에서 술래/러너 공통으로 설정
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
+	USpringArmComponent* CameraBoom;
 
 	/** Jump Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))

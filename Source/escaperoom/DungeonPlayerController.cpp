@@ -29,6 +29,12 @@
 #include "ResultRoomActor.h"
 #include "Engine/SkeletalMesh.h"
 #include "Materials/MaterialInterface.h"
+// ===== [DEBUG KEYS] 시작 ===== (디버그 키 제거 시 이 블록만 지우면 됨)
+#include "RunnerCharacter.h"
+#include "DiceActor.h"
+#include "ExitActor.h"
+#include "GameFramework/CharacterMovementComponent.h"
+// ===== [DEBUG KEYS] 끝 =====
 
 void ADungeonPlayerController::BeginPlay()
 {
@@ -135,6 +141,13 @@ APropSpawnManagerActor* ADungeonPlayerController::FindPropSpawner() const
 void ADungeonPlayerController::ShowLoadingWidget()
 {
 	if (!LoadingWidgetClass) return;
+
+	// LocalPlayer가 아직 없거나 이미 떨어진 상태면 CreateWidget이 실패함 (접속 중/맵 이동·종료 중)
+	if (!GetLocalPlayer())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[UI] %s: LocalPlayer 없음 - 로딩 위젯 생성 건너뜀"), *GetName());
+		return;
+	}
 
 	// UI 생성 및 등록
 	if (!LoadingWidget)
@@ -343,11 +356,25 @@ void ADungeonPlayerController::AutoManageActiveCameraTarget(AActor* SuggestedTar
 	}
 
 	Super::AutoManageActiveCameraTarget(SuggestedTarget);
+
+	if (Cast<ACabinetActor>(GetPawn()))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[CabinetDiag] AutoManageActiveCameraTarget %s: Suggested=%s, ViewTarget=%s, bAutoManage=%d"),
+			*GetName(), *GetNameSafe(SuggestedTarget), *GetNameSafe(GetViewTarget()), bAutoManageActiveCameraTarget ? 1 : 0);
+		if (SuggestedTarget == this)
+		{
+			// [진단] 캐비넷 조종 중인데 시점이 컨트롤러로 되돌아감 -> 누가 불렀는지 콜스택 출력
+			FDebug::DumpStackTraceToLog(ELogVerbosity::Warning);
+		}
+	}
 }
 
 void ADungeonPlayerController::AcknowledgePossession(APawn* P)
 {
 	Super::AcknowledgePossession(P);
+
+	UE_LOG(LogTemp, Warning, TEXT("[CabinetDiag] AcknowledgePossession %s: Pawn=%s, NetMode=%d"),
+		*GetName(), *GetNameSafe(P), (int32)GetNetMode());
 
 	if (Cast<ACabinetActor>(P))
 	{
@@ -391,7 +418,152 @@ void ADungeonPlayerController::Tick(float DeltaSeconds)
 	{
 		UpdateBGMForTerrorRadius();
 	}
+
+	// ===== [DEBUG KEYS] 시작 ===== (디버그 키 제거 시 이 블록만 지우면 됨)
+	HandleDebugKeys();
+	// ===== [DEBUG KEYS] 끝 =====
 }
+
+// ===== [DEBUG KEYS] 시작 =====
+// 디버그 키 제거 시 이 블록 전체(HandleDebugKeys, ServerDebugTeleport_Implementation)를 지우면 됨
+void ADungeonPlayerController::HandleDebugKeys()
+{
+#if !UE_BUILD_SHIPPING
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	// IA/IMC를 거치지 않고 키 상태를 직접 읽음 -> IMC 우선순위/소비와 무관하게 항상 동작
+	if (WasInputKeyJustPressed(EKeys::Eight))
+	{
+		ServerDebugTeleport(0);
+	}
+	if (WasInputKeyJustPressed(EKeys::Nine))
+	{
+		ServerDebugTeleport(1);
+	}
+#endif
+}
+
+void ADungeonPlayerController::ServerDebugTeleport_Implementation(uint8 TargetType)
+{
+#if !UE_BUILD_SHIPPING
+	// 러너 또는 술래를 직접 조종 중일 때만 (캐비넷에 숨은 상태(조종 폰이 캐비넷) / 관전 중이면 무시).
+	// 아래 변수명은 Runner지만 술래(ACharacter)도 똑같이 이동시킴
+	ACharacter* Runner = Cast<ACharacter>(GetPawn());
+	const ARunnerCharacter* AsRunner = Cast<ARunnerCharacter>(Runner);
+	if (!Runner || (AsRunner && AsRunner->IsHidingInCabinet()))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[DebugKey] %s: 캐릭터를 조종 중이 아니라 무시"), *GetName());
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	AActor* TargetActor = nullptr;
+	FVector Base = FVector::ZeroVector; // 바닥을 찾기 시작할 위치
+
+	if (TargetType == 0)
+	{
+		// ---- 8번: 주사위 ----
+		// 아직 안 먹은(보이는) 주사위만 모아서, 누를 때마다 순서대로 다음 주사위로
+		// (거리순으로 고르면 이동 후 기준점이 바뀌어 같은 주사위만 반복될 수 있어서 고정된 순서로 순환)
+		TArray<ADiceActor*> Dice;
+		for (TActorIterator<ADiceActor> It(World); It; ++It)
+		{
+			if (It->IsDiceVisible())
+			{
+				Dice.Add(*It);
+			}
+		}
+		if (Dice.Num() == 0)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[DebugKey] 남은 주사위가 없음"));
+			return;
+		}
+
+		ADiceActor* Target = Dice[DebugDiceIndex % Dice.Num()];
+		DebugDiceIndex = (DebugDiceIndex + 1) % Dice.Num();
+		TargetActor = Target;
+
+		// 주사위와 겹치지 않게 러너 쪽 방향으로 살짝(100cm) 비켜선 위치
+		FVector Away = Runner->GetActorLocation() - Target->GetActorLocation();
+		Away.Z = 0.f;
+		Away = Away.IsNearlyZero() ? FVector::ForwardVector : Away.GetSafeNormal();
+		Base = Target->GetActorLocation() + Away * 100.f;
+	}
+	else
+	{
+		// ---- 9번: 탈출구 ----
+		// 열린 탈출구 중 가장 가까운 것, 열린 게 없으면 아무 탈출구 중 가장 가까운 것
+		AExitActor* BestOpen = nullptr;
+		AExitActor* BestAny = nullptr;
+		float BestOpenDistSq = TNumericLimits<float>::Max();
+		float BestAnyDistSq = TNumericLimits<float>::Max();
+
+		for (TActorIterator<AExitActor> It(World); It; ++It)
+		{
+			const float DistSq = FVector::DistSquared(Runner->GetActorLocation(), It->GetActorLocation());
+			if (DistSq < BestAnyDistSq)
+			{
+				BestAnyDistSq = DistSq;
+				BestAny = *It;
+			}
+			if (It->IsOpen() && DistSq < BestOpenDistSq)
+			{
+				BestOpenDistSq = DistSq;
+				BestOpen = *It;
+			}
+		}
+
+		AExitActor* Target = BestOpen ? BestOpen : BestAny;
+		if (!Target)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[DebugKey] 탈출구가 없음"));
+			return;
+		}
+		TargetActor = Target;
+
+		// 천장에 붙어있으므로 탈출구 위치 바로 아래에서 바닥을 찾음
+		Base = Target->GetActorLocation();
+	}
+
+	// 위치 기준점에서 아래로 라인트레이스해서 바닥을 찾음 (대상 액터/러너 자신은 무시)
+	const float HalfHeight = Runner->GetCapsuleComponent() ? Runner->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() : 96.f;
+	FVector Dest = Base;
+
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(DebugTeleportFloor), false, Runner);
+	Params.AddIgnoredActor(TargetActor);
+
+	FHitResult Hit;
+	const FVector TraceStart = Base + FVector(0.f, 0.f, TargetType == 0 ? 50.f : -10.f);
+	const FVector TraceEnd = Base - FVector(0.f, 0.f, 2000.f);
+	if (World->LineTraceSingleByChannel(Hit, TraceStart, TraceEnd, ECC_Visibility, Params))
+	{
+		Dest = Hit.Location + FVector(0.f, 0.f, HalfHeight + 2.f);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[DebugKey] 바닥을 못 찾아서 대상 위치로 그대로 이동"));
+	}
+
+	if (UCharacterMovementComponent* Movement = Runner->GetCharacterMovement())
+	{
+		Movement->StopMovementImmediately();
+	}
+
+	// TeleportTo: 벽/물체와 겹치면 엔진이 근처 빈 자리로 보정 (실패하면 false)
+	const bool bOk = Runner->TeleportTo(Dest, Runner->GetActorRotation());
+	UE_LOG(LogTemp, Warning, TEXT("[DebugKey] %s -> %s 근처로 이동 %s (%s)"),
+		*GetNameSafe(Runner), *GetNameSafe(TargetActor), bOk ? TEXT("성공") : TEXT("실패"), *Dest.ToString());
+#endif
+}
+// ===== [DEBUG KEYS] 끝 =====
 
 void ADungeonPlayerController::StartMatchBGM()
 {
@@ -488,6 +660,13 @@ void ADungeonPlayerController::ShowMatchWidget()
 {
 	if (!MatchWidgetClass) return;
 
+	// 시작 연출 도중 캐릭터가 사라지거나 맵 이동·종료 중이면 LocalPlayer가 이미 없을 수 있음
+	if (!GetLocalPlayer())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[UI] %s: LocalPlayer 없음 - 매치 위젯 생성 건너뜀"), *GetName());
+		return;
+	}
+
 	if (!MatchWidget)
 	{
 		MatchWidget = CreateWidget<UMatchWidget>(this, MatchWidgetClass);
@@ -548,6 +727,12 @@ UEscapeFadeWidget* ADungeonPlayerController::EnsureEscapeFadeWidget()
 {
 	if (!EscapeFadeWidgetClass)
 	{
+		return nullptr;
+	}
+
+	if (!EscapeFadeWidget && !GetLocalPlayer())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[UI] %s: LocalPlayer 없음 - 탈출 위젯 생성 건너뜀"), *GetName());
 		return nullptr;
 	}
 
@@ -706,6 +891,31 @@ void ADungeonPlayerController::ReturnToLobby()
 {
 	if (!IsLocalController())
 	{
+		return;
+	}
+
+	// [탈출 후 Exit Game] 탈출한 러너는 이 시점에 이미 승리가 확정이므로, 시작 화면으로 바로 가지 않고
+	// 판이 끝났을 때(ClientShowMatchEnd)와 같은 흐름을 탐: 결과(러너 승리) 저장 -> 암전 -> 로비 이동 ->
+	// 로비에서 결과 방 엔딩 -> 엔딩의 버튼으로 시작 화면. 판 자체는 남은 사람들끼리 계속 진행됨
+	// (탈출한 러너는 Logout에서 남은 러너 수에 반영되지 않음)
+	const AMatchPlayerState* MyMPS = GetPlayerState<AMatchPlayerState>();
+	if (MyMPS && MyMPS->HasEscaped())
+	{
+		if (UGameInstance* GI = GetGameInstance())
+		{
+			if (UEscapeRoomSessionSubsystem* Session = GI->GetSubsystem<UEscapeRoomSessionSubsystem>())
+			{
+				// 러너 엔딩 UI는 통계 빈칸 규칙 그대로 (ClientShowMatchEnd와 동일)
+				Session->SetPendingMatchResult(EMatchResultRoomType::RunnerWin, FText::GetEmpty());
+			}
+		}
+
+		// 관전 전환/입력 정리 후 암전 -> 완전히 검어지면 TravelToLobbyForResult (EndMatch도 거기서 처리)
+		bLocalSpectateInputEnabled = false;
+		SetIgnoreMoveInput(true);
+		SetIgnoreLookInput(true);
+		UE_LOG(LogTemp, Log, TEXT("[Lobby] Escaped runner leaving -> lobby ending (RunnerWin)"));
+		ShowLocalMatchEnd();
 		return;
 	}
 

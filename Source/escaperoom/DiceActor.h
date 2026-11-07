@@ -34,6 +34,10 @@ class ESCAPEROOM_API ADiceActor : public AMiscActor
 public:
 	ADiceActor();
 
+	// ===== [DEBUG KEYS] 시작 ===== (디버그 키 제거 시 이 블록만 지우면 됨 - DungeonPlayerController 8번 키에서 사용)
+	bool IsDiceVisible() const { return bIsVisible; }
+	// ===== [DEBUG KEYS] 끝 =====
+
 protected:
 	// MiscActor 공통 구현이 이미 GetInteractHoldTime(0=즉시)/OnInteractHoldUpdate(빈 구현)를
 	// 채워주므로, 상호작용 가능 여부(주사위는 러너 전용) + 실제 토글 로직만 override하면 됨

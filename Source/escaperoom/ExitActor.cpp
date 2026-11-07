@@ -179,7 +179,11 @@ void AExitActor::OnInteractHoldUpdateInternal(APawn* Interactor, bool bHolding)
 		{
 			// 한 번에 한 명만 - 홀드를 시작한 러너로 잠금
 			CurrentClimber = Runner;
-			Runner->MulticastBeginLadderHold();
+			OnRep_CurrentClimber(); // 서버 자신의 화면에도 사다리 내림
+			// 사다리 앞(ClimbStartPoint)으로 스냅한 뒤 오르기 시작 - 없으면 러너 현재 위치/방향 그대로
+			const FVector StartLocation = ClimbStartPoint ? ClimbStartPoint->GetComponentLocation() : Runner->GetActorLocation();
+			const FRotator StartRotation = ClimbStartPoint ? ClimbStartPoint->GetComponentRotation() : Runner->GetActorRotation();
+			Runner->MulticastBeginLadderHold(StartLocation, StartRotation);
 		}
 		else
 		{
@@ -187,10 +191,52 @@ void AExitActor::OnInteractHoldUpdateInternal(APawn* Interactor, bool bHolding)
 			if (CurrentClimber.Get() == Runner)
 			{
 				CurrentClimber = nullptr;
+				OnRep_CurrentClimber(); // 범위 밖이면 사다리 닫음
 			}
 			Runner->MulticastCancelLadderHold();
 		}
 	}
+}
+
+void AExitActor::OnRep_CurrentClimber()
+{
+	if (IsValid(CurrentClimber.Get()))
+	{
+		// 누군가 오르기 시작 - 범위 오버랩과 상관없이 사다리를 내림 (이미 내려와 있으면 소리/재생 생략됨)
+		if (bIsOpen)
+		{
+			PlayRangeSequenceOpen();
+		}
+		return;
+	}
+
+	// 오르기가 끝남(취소) - 스냅 때문에 범위 밖에 서 있을 수 있으므로, 범위 안에 러너가 아무도 없을 때만 닫음
+	if (!IsAnyRunnerInSequenceRange())
+	{
+		PlayRangeSequenceClose();
+	}
+}
+
+bool AExitActor::IsAnyRunnerInSequenceRange() const
+{
+	if (!SequenceTriggerRange)
+	{
+		return false;
+	}
+
+	TArray<AActor*> Overlapping;
+	SequenceTriggerRange->GetOverlappingActors(Overlapping, APawn::StaticClass());
+	for (AActor* Actor : Overlapping)
+	{
+		if (const APawn* Pawn = Cast<APawn>(Actor))
+		{
+			if (!IsChaser(Pawn))
+			{
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 void AExitActor::OnRep_IsOpen()
@@ -245,6 +291,14 @@ void AExitActor::OnSequenceRangeEndOverlap(UPrimitiveComponent* OverlappedComp, 
 		return;
 	}
 
+	// 누군가 사다리를 오르는 중이면 닫지 않음 (홀드 시작 스냅으로 범위 밖으로 나가는 경우 포함).
+	// 오르기가 취소되면 OnRep_CurrentClimber에서 범위를 다시 확인해 닫음.
+	// 다른 러너가 아직 범위 안에 남아있어도 닫지 않음
+	if (IsValid(CurrentClimber.Get()) || IsAnyRunnerInSequenceRange())
+	{
+		return;
+	}
+
 	PlayRangeSequenceClose();
 }
 
@@ -259,11 +313,15 @@ void AExitActor::PlayRangeSequenceOpen()
 	// 이미 정방향 재생 중이거나 끝까지 열려있으면 소리 생략
 	const bool bAlreadyOpening = Player->IsPlaying() && !Player->IsReversed();
 	const bool bAlreadyOpen = !Player->IsPlaying() && Player->GetCurrentTime().AsSeconds() >= Player->GetDuration().AsSeconds() - KINDA_SMALL_NUMBER;
-	if (!bAlreadyOpening && !bAlreadyOpen)
+	// 이미 열리는 중/다 열린 상태면 Play()도 부르지 않음 - 끝까지 재생된 시퀀스에 Play()를 다시 부르면
+	// 처음부터 재생돼서, 내려와 있던 사다리가 위로 순간이동했다가 다시 내려오는 문제가 있었음
+	// (오르는 중 캡슐 보정 텔레포트로 오버랩이 다시 계산될 때 BeginOverlap/OnRep_CurrentClimber가 여기로 들어옴)
+	if (bAlreadyOpening || bAlreadyOpen)
 	{
-		PlayOpenSound();
+		return;
 	}
 
+	PlayOpenSound();
 	Player->Play();
 }
 

@@ -173,4 +173,8 @@ public:
 
 	UFUNCTION(Exec)
 	void Debug_SetReady(bool bReady);
+
+	// [디버그] 서버 없이 로비 결과창 확인. 콘솔: Debug_ShowEnding 0~3 (0=RunnerWin 1=RunnerLose 2=ChaserWin 3=ChaserLose)
+	UFUNCTION(Exec)
+	void Debug_ShowEnding(int32 RoomType);
 };

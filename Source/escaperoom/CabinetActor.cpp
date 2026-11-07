@@ -103,7 +103,7 @@ bool ACabinetActor::CanInteractInternal(const APawn* Interactor) const
         // 술래: 이미 여는 중이 아니면 언제든 열기 시도 가능 (비어있어도 "허탕" 상호작용은 허용).
         // 단, 지금 여는 중인 그 술래 본인(CurrentOpener)의 완료 요청은 항상 통과시켜야 함 -
         // 그렇지 않으면 홀드 완료 시점(bIsBeingOpened==true)에 자기 자신이 막혀서 절대 안 열림
-        return !bIsBeingOpened || CurrentOpener == Interactor;
+        return !bCatchPending && (!bIsBeingOpened || CurrentOpener == Interactor);
     }
 
     // 도망자: 비어있고 술래가 여는 중이 아니고, 다른 도망자가 먼저 홀드를 시작한 상태가 아닐
@@ -138,60 +138,30 @@ void ACabinetActor::OnInteract_Implementation(APawn* Interactor)
         CurrentOpener = nullptr;
         OnRep_IsBeingOpened();
 
-        // 열기 홀드 몽타주 정지 → 아래에서 목조르기(러너 있음) 또는 허탕(비어있음) 몽타주로 넘어감
         AChaserCharacter* OpenerChaser = Cast<AChaserCharacter>(Interactor);
-        if (OpenerChaser)
-        {
-            OpenerChaser->MulticastStopCabinetOpen();
-        }
 
         if (!OccupyingRunner)
         {
-            // 허탕: 비어있는 캐비넷을 연 경우 허탕 몽타주 재생 (재생 중 술래 이동/시점 회전 잠금)
+            // 열기 홀드 몽타주 정지 (블렌드아웃) → 허탕 몽타주
             if (OpenerChaser)
             {
+                OpenerChaser->MulticastStopCabinetOpen();
                 OpenerChaser->MulticastPlayCabinetEmpty();
             }
             return;
         }
 
-        if (OccupyingRunner)
+        // 러너 발각: 여는 몽타주를 블렌드 없이 즉시 끊고, 목조르기는 한 프레임 뒤에 시작.
+        // 같은 프레임에 바로 StartChokeGrab()을 부르면 손 소켓(GrabSocket)이 아직 캐비넷 여는 자세에
+        // 있어서 러너가 엉뚱한 위치에 붙음 → 한 프레임 동안 애니메이션이 기본 자세로 갱신되게 기다림
+        if (OpenerChaser)
         {
-            ARunnerCharacter* Caught = OccupyingRunner;
-
-            // 조종권부터 원래 도망자에게 돌려준 다음 (캐비넷을 조종한 채로 잡히는 상태 방지) -
-            // ExitCabinet으로 숨김 상태/콜리전/이동이 풀린 뒤라야 아래 목조르기 연출(MOVE_None 전환 +
-            // ChokeGrabPoint 스냅)이 제대로 덮어씀
-            ReturnControlToRunner();
-
-            // Grab으로 잡았을 때와 동일한 목조르기 연출을 거침 (러너를 술래 손으로 스냅 → 양쪽 몽타주 →
-            // Choke Capture 노티파이 시점에 Capture()로 감옥 이동). 이미 러너를 캐비넷에서 꺼냈으므로,
-            // 연출을 시작하지 못하는 경우(술래 캐릭터가 아님/이미 다른 러너를 조르는 중 등)엔 바로 감옥으로 보냄
-            AChaserCharacter* Chaser = Cast<AChaserCharacter>(Interactor);
-            if (Chaser && Chaser->CanStartChokeGrab(Caught))
-            {
-                // 러너가 캐비넷 메시와 겹치지 않도록, 연출 전에 술래를 ChaserCatchPoint(블루프린트에서 배치)로
-                // 옮기고 그 방향(Yaw)을 바라보게 함. 높이(Z)는 술래의 현재 높이 유지(바닥에 박히거나 뜨지 않도록).
-                // 러너는 StartChokeGrab이 그 순간의 ChokeGrabPoint로 스냅하므로 술래만 옮기면 자동으로 따라옴
-                if (ChaserCatchPoint)
-                {
-                    FVector ChaserLocation = ChaserCatchPoint->GetComponentLocation();
-                    ChaserLocation.Z = Chaser->GetActorLocation().Z;
-                    const FRotator ChaserRotation(0.f, ChaserCatchPoint->GetComponentRotation().Yaw, 0.f);
-
-                    Chaser->SnapForChokeGrab(ChaserLocation, ChaserRotation);
-                }
-                Chaser->StartChokeGrab(Caught);
-            }
-            else
-            {
-                Caught->Capture();
-            }
-
-            // 연출용 훅(뚜껑 열림 애니메이션 등은 블루프린트에서 구현)
-            Caught->OnCaughtInCabinet();
-            OnOccupantCaught(Caught);
+            OpenerChaser->MulticastStopCabinetOpen(true);
         }
+
+        bCatchPending = true;
+        PendingCatchChaser = OpenerChaser;
+        GetWorldTimerManager().SetTimerForNextTick(this, &ACabinetActor::ExecutePendingCatch);
         return;
     }
 
@@ -205,6 +175,56 @@ void ACabinetActor::OnInteract_Implementation(APawn* Interactor)
     {
         StartHiding(Runner);
     }
+}
+
+void ACabinetActor::ExecutePendingCatch()
+{
+    if (!HasAuthority() || !bCatchPending)
+    {
+        return;
+    }
+    bCatchPending = false;
+
+    AChaserCharacter* Chaser = PendingCatchChaser.Get();
+    PendingCatchChaser = nullptr;
+
+    if (!OccupyingRunner)
+    {
+        // 그 사이 러너가 나가버림(접속 종료 등) - 잡을 대상 없음
+        return;
+    }
+
+    ARunnerCharacter* Caught = OccupyingRunner;
+
+    // 조종권부터 원래 도망자에게 돌려준 다음 (캐비넷을 조종한 채로 잡히는 상태 방지) -
+    // ExitCabinet으로 숨김 상태/콜리전/이동이 풀린 뒤라야 아래 목조르기 연출(MOVE_None 전환 +
+    // ChokeGrabPoint 스냅)이 제대로 덮어씀
+    ReturnControlToRunner();
+
+    // Grab으로 잡았을 때와 동일한 목조르기 연출 (러너를 술래 손 소켓으로 스냅 → 양쪽 몽타주 →
+    // Choke Capture 노티파이 시점에 Capture()). 연출을 시작할 수 없으면 바로 감옥으로
+    if (Chaser && Chaser->CanStartChokeGrab(Caught))
+    {
+        // 러너가 캐비넷 메시와 겹치지 않도록 술래를 ChaserCatchPoint로 옮김 (높이는 현재 Z 유지, Yaw만).
+        // 러너는 StartChokeGrab이 그 순간의 ChokeGrabPoint로 스냅하므로 술래만 옮기면 자동으로 따라옴
+        if (ChaserCatchPoint)
+        {
+            FVector ChaserLocation = ChaserCatchPoint->GetComponentLocation();
+            ChaserLocation.Z = Chaser->GetActorLocation().Z;
+            const FRotator ChaserRotation(0.f, ChaserCatchPoint->GetComponentRotation().Yaw, 0.f);
+
+            Chaser->SnapForChokeGrab(ChaserLocation, ChaserRotation);
+        }
+        Chaser->StartChokeGrab(Caught);
+    }
+    else
+    {
+        Caught->Capture();
+    }
+
+    // 연출용 훅(뚜껑 열림 애니메이션 등은 블루프린트에서 구현)
+    Caught->OnCaughtInCabinet();
+    OnOccupantCaught(Caught);
 }
 
 void ACabinetActor::StartHiding(ARunnerCharacter* Runner)
@@ -224,6 +244,10 @@ void ACabinetActor::StartHiding(ARunnerCharacter* Runner)
     {
         PC->Possess(this);
     }
+
+    // [진단] 서버에서 빙의가 실제로 넘어갔는지
+    UE_LOG(LogTemp, Warning, TEXT("[CabinetDiag][Server] StartHiding %s: PC=%s, PC->GetPawn()=%s, Cabinet->Controller=%s"),
+        *GetName(), *GetNameSafe(PC), PC ? *GetNameSafe(PC->GetPawn()) : TEXT("null"), *GetNameSafe(GetController()));
 
     OnRep_OccupyingRunner();
 }
@@ -592,6 +616,15 @@ void ACabinetActor::PawnClientRestart()
     // 첫 빙의라면 여기(Super) 안에서 SetupPlayerInputComponent(키 바인딩)가 먼저 불림
     Super::PawnClientRestart();
 
+    // [진단] 클라에 ClientRestart가 도착했는지 / 로컬 입력 세팅 조건
+    {
+        APlayerController* DiagPC = Cast<APlayerController>(GetController());
+        UE_LOG(LogTemp, Warning, TEXT("[CabinetDiag] PawnClientRestart %s: NetMode=%d, PC=%s, IsLocal=%d, LocalPlayer=%d, IMC=%s, LookAction=%s, ExitAction=%s, InputComponent=%d"),
+            *GetName(), (int32)GetNetMode(), *GetNameSafe(DiagPC), DiagPC ? DiagPC->IsLocalController() : 0,
+            (DiagPC && DiagPC->GetLocalPlayer()) ? 1 : 0, *GetNameSafe(CabinetMappingContext.Get()),
+            *GetNameSafe(CabinetLookAction.Get()), *GetNameSafe(CabinetExitAction.Get()), InputComponent ? 1 : 0);
+    }
+
     SetupLocalCabinetInput();
 }
 
@@ -615,7 +648,8 @@ void ACabinetActor::SetupLocalCabinetInput()
         {
             if (CabinetMappingContext)
             {
-                Subsystem->AddMappingContext(CabinetMappingContext, 1);
+                Subsystem->AddMappingContext(CabinetMappingContext, CabinetMappingPriority);
+                UE_LOG(LogTemp, Warning, TEXT("[CabinetDiag] %s: IMC_Cabinet 추가됨 (PC=%s)"), *GetName(), *GetNameSafe(PC));
 
                 // 로컬 플레이어가 있는(=이 화면에서 조종 중인) 컨트롤러만 기억 - 나갈 때 정리용
                 LocalInputController = PC;
@@ -655,6 +689,13 @@ void ACabinetActor::HandleLookInput(const FInputActionValue& Value)
 {
     const FVector2D Axis = Value.Get<FVector2D>();
 
+    // [진단] Look 입력이 캐비넷까지 오는지 (스팸 방지: 처음 몇 번만)
+    static int32 DiagLookCount = 0;
+    if (DiagLookCount++ < 3)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[CabinetDiag] HandleLookInput %s: (%.2f, %.2f)"), *GetName(), Axis.X, Axis.Y);
+    }
+
     // 부호가 반대로 느껴지면 IMC의 Look 액션에 Negate 모디파이어를 걸어서 조정하면 됨
     PeekYaw = FMath::Clamp(PeekYaw + Axis.X * PeekLookSensitivity, -PeekYawLimit, PeekYawLimit);
     PeekPitch = FMath::Clamp(PeekPitch + Axis.Y * PeekLookSensitivity, -PeekPitchLimit, PeekPitchLimit);
@@ -671,6 +712,8 @@ void ACabinetActor::HandleExitInput(const FInputActionValue& Value)
     // 술래가 지금 이 캐비넷을 여는 중이면(bIsBeingOpened는 복제되므로 여기서도 최신값을 앎)
     // 나가기 시도 자체를 시작하지 않음 - 잡히기 직전에 빠져나가는 걸 막기 위함.
     // (진짜 방어는 서버 쪽 ServerRequestExit_Implementation에 있고, 이건 즉각적인 클라 피드백용)
+    UE_LOG(LogTemp, Warning, TEXT("[CabinetDiag] HandleExitInput %s: bIsBeingOpened=%d"), *GetName(), bIsBeingOpened ? 1 : 0);
+
     if (bIsBeingOpened) return;
 
     // 들어올 때(RequiredHoldTime)와 동일한 홀드 시간이 지나야 실제로 나가짐
@@ -711,13 +754,16 @@ void ACabinetActor::CompleteExitHold()
 
 void ACabinetActor::ServerRequestExit_Implementation()
 {
+    UE_LOG(LogTemp, Warning, TEXT("[CabinetDiag][Server] ServerRequestExit %s: bIsBeingOpened=%d, Occupant=%s"),
+        *GetName(), bIsBeingOpened ? 1 : 0, *GetNameSafe(OccupyingRunner.Get()));
+
     // 홀드가 끝까지 채워져서 여기 도달했으니 미리보기 상태를 해제 (True/False 결과 상관없이 최종적으로 닫힌 모습으로)
     SetExitHoldPreview(false);
 
     // 술래가 여는 중이면 나가기를 거부함 - 잡히기 직전에 빠져나가는 걸 막는 진짜 방어선(서버 권위).
     // 클라이언트의 HandleExitInput/ServerSetExitHold 가드를 다 건너뛰고 여기로 직접 RPC를 보내는
     // 변조된 클라이언트가 있어도 여기서 최종적으로 막힘
-    if (bIsBeingOpened) return;
+    if (bIsBeingOpened || bCatchPending) return;
 
     // 자발적으로 나가는 경우이므로, 숨기 직전 위치로 복귀시킴
     ReturnControlToRunner(true);
@@ -727,7 +773,7 @@ void ACabinetActor::ServerSetExitHold_Implementation(bool bHolding)
 {
     // 홀드 시작(true) 요청은 술래가 여는 중이면 서버에서도 거부 (클라이언트 변조 대비).
     // 취소(false)는 항상 통과시켜 미리보기 상태가 꼬이지 않게 함
-    if (bHolding && bIsBeingOpened) return;
+    if (bHolding && (bIsBeingOpened || bCatchPending)) return;
 
     SetExitHoldPreview(bHolding);
 }

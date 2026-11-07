@@ -12,6 +12,7 @@
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Camera/CameraComponent.h"
+#include "Components/TimelineComponent.h"
 #include "DoorActor.h"
 #include "CabinetActor.h"
 #include "Interactable.h"
@@ -42,11 +43,43 @@ AChaserCharacter::AChaserCharacter()
     TerrorRadiusAudio = CreateDefaultSubobject<UAudioComponent>(TEXT("TerrorRadiusAudio"));
     TerrorRadiusAudio->SetupAttachment(RootComponent);
     TerrorRadiusAudio->bAutoActivate = false;
+
+    // 부감용 머리 카메라. 시점 계산에만 쓰므로 꺼둠 (CalcCamera 참고)
+    OverheadCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("OverheadCamera"));
+    OverheadCamera->SetupAttachment(GetMesh(), OverheadCameraSocketName);
+    OverheadCamera->bAutoActivate = false;
+    OverheadCamera->bUsePawnControlRotation = false;
 }
 
 void AChaserCharacter::BeginPlay()
 {
     Super::BeginPlay();
+
+    // BP에서 소켓 이름을 바꿨을 수 있으므로 지금 값으로 다시 붙임 (생성자에서는 C++ 기본값만 보임)
+    if (OverheadCamera && GetMesh())
+    {
+        if (!GetMesh()->DoesSocketExist(OverheadCameraSocketName))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[Overhead] 메시 %s에 소켓 %s가 없음 - OverheadCameraSocketName 확인 필요"),
+                *GetNameSafe(GetMesh()->GetSkeletalMeshAsset()), *OverheadCameraSocketName.ToString());
+        }
+        OverheadCamera->AttachToComponent(GetMesh(), FAttachmentTransformRules::KeepRelativeTransform, OverheadCameraSocketName);
+    }
+
+    // 카메라 블렌드가 따라갈 목 타임라인 찾기 (BP Timeline은 BeginPlay 전에 컴포넌트로 만들어져 있음)
+    TInlineComponentArray<UTimelineComponent*> Timelines(this);
+    for (UTimelineComponent* Timeline : Timelines)
+    {
+        if (Timeline && Timeline->GetFName() == NeckTimelineName)
+        {
+            NeckTimeline = Timeline;
+            break;
+        }
+    }
+    if (!NeckTimeline)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[Overhead] 타임라인 %s를 찾지 못함 - 부감 카메라 전환이 동작하지 않음"), *NeckTimelineName.ToString());
+    }
 
     // 공포 반경 사운드 1차 판단. 클라에서는 이 시점에 아직 컨트롤러가 복제 안 돼서 술래 본인인데도
     // IsLocallyControlled()가 false일 수 있음 -> 잠깐 켜졌다가 NotifyControllerChanged에서 다시 꺼짐
@@ -160,7 +193,7 @@ void AChaserCharacter::MulticastBeginCabinetOpen_Implementation()
     }
 }
 
-void AChaserCharacter::MulticastStopCabinetOpen_Implementation()
+void AChaserCharacter::MulticastStopCabinetOpen_Implementation(bool bInstant)
 {
     if (CabinetOpenMontage && GetMesh())
     {
@@ -168,7 +201,8 @@ void AChaserCharacter::MulticastStopCabinetOpen_Implementation()
         {
             if (AnimInstance->Montage_IsPlaying(CabinetOpenMontage))
             {
-                AnimInstance->Montage_Stop(CabinetOpenMontage->BlendOut.GetBlendTime(), CabinetOpenMontage);
+                const float BlendTime = bInstant ? 0.f : CabinetOpenMontage->BlendOut.GetBlendTime();
+                AnimInstance->Montage_Stop(BlendTime, CabinetOpenMontage);
             }
         }
     }
@@ -643,6 +677,50 @@ void AChaserCharacter::Tick(float DeltaSeconds)
     {
         UpdateOverheadPromptText();
     }
+}
+
+float AChaserCharacter::GetOverheadCameraAlpha() const
+{
+    // 타임라인 위치(초)를 기준으로 계산. 위치 0 = 목이 다 줄어든 상태
+    // - 늘어날 때: 0초부터 OverheadCameraBlendTime까지 전환
+    // - 줄어들 때: 위치가 거꾸로 가므로 같은 전환이 역재생되고, 위치 0(목 도착)에서 정확히 끝남
+    if (!NeckTimeline)
+    {
+        return 0.f;
+    }
+    const float Position = NeckTimeline->GetPlaybackPosition();
+    if (OverheadCameraBlendTime <= 0.f)
+    {
+        return Position > 0.f ? 1.f : 0.f;
+    }
+    return FMath::Clamp(Position / OverheadCameraBlendTime, 0.f, 1.f);
+}
+
+void AChaserCharacter::CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult)
+{
+    Super::CalcCamera(DeltaTime, OutResult);
+
+    // 평소(0)에는 기존 동작 그대로 - 매치 인트로 카메라 등에 영향 없음
+    const float CameraAlpha = GetOverheadCameraAlpha();
+    if (CameraAlpha <= 0.f || !OverheadCamera)
+    {
+        return;
+    }
+
+    FMinimalViewInfo HeadView;
+    OverheadCamera->GetCameraView(DeltaTime, HeadView);
+
+    // 소켓 회전 + 마우스 위아래 시점.
+    // 주의: 컨트롤러가 있으면 GetBaseAimRotation은 "직전 프레임 카메라 회전"을 돌려줘서 여기에 쓰면 값이 계속 누적됨
+    // -> 조종 중인 머신은 컨트롤 회전을 쓰고, 컨트롤러가 없는 관전자 화면(원격 폰)만 복제된 Pitch를 쓴다
+    const float LookPitch = Controller ? Controller->GetControlRotation().Pitch : GetBaseAimRotation().Pitch;
+    HeadView.Rotation.Pitch = FMath::Clamp(HeadView.Rotation.Pitch + FRotator::NormalizeAxis(LookPitch), -89.f, 89.f);
+
+    // 시작과 끝이 부드럽게 (선형으로 섞으면 전환 순간이 툭 끊겨 보임)
+    const float BlendAlpha = FMath::SmoothStep(0.f, 1.f, CameraAlpha);
+    OutResult.Location = FMath::Lerp(OutResult.Location, HeadView.Location, BlendAlpha);
+    OutResult.Rotation = FQuat::Slerp(OutResult.Rotation.Quaternion(), HeadView.Rotation.Quaternion(), BlendAlpha).Rotator();
+    OutResult.FOV = FMath::Lerp(OutResult.FOV, HeadView.FOV, BlendAlpha);
 }
 
 void AChaserCharacter::CacheAllCeilings()

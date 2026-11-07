@@ -14,6 +14,7 @@
 #include "TimerManager.h"
 #include "Net/UnrealNetwork.h"
 #include "RunnerCharacter.h"
+#include "EscapeRoomGameState.h"
 
 // 런타임: 오너 액터에서 이름으로 컴포넌트 찾기 (SCS로 만든 컴포넌트의 이름 = BP 변수 이름)
 template<typename T>
@@ -323,8 +324,21 @@ void UJailGateComponent::OpenDoors()
 		return;
 	}
 
+	// 이미 열려있는 상태에서 다시 밟은 거면(타이머 연장만) 알림은 다시 안 보냄
+	const bool bWasOpen = bIsOpen;
+
 	bIsOpen = true;
 	ApplyOpenState(); // 리슨 서버 자신의 화면 (OnRep은 클라이언트에서만 자동 호출)
+
+	// 알림: 감옥문 열림 (전원에게)
+	if (!bWasOpen)
+	{
+		if (AEscapeRoomGameState* GS = GetWorld()->GetGameState<AEscapeRoomGameState>())
+		{
+			// 알림음은 공통 대신 WBP_Match의 JailDoorOpenedSound
+			GS->MulticastMatchNotifyWithSound(NSLOCTEXT("MatchNotify", "JailDoorOpened", "The jail door opened!"), EMatchNotifySound::JailDoorOpened);
+		}
+	}
 
 	GetWorld()->GetTimerManager().SetTimer(AutoCloseTimer, this, &UJailGateComponent::CloseDoors, OpenDuration, false);
 }

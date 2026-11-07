@@ -50,12 +50,18 @@ void URoomWidget::RefreshRoomInfo()
 		{
 			RoomNameText->SetText(FText::FromString(Room->RoomName));
 		}
-		if (MemberCountText)
+		// 매치 시작 후에는 인원수/멤버 목록을 마지막 모습 그대로 고정.
+		// 술래가 먼저 맵을 옮기면 로비 서버 Logout -> Members에서 빠지는데, 이게 복제되면 남은 사람 화면에서 줄이 사라졌음.
+		// (시작 실패로 서버가 bMatchStarted를 false로 되돌리면 다시 갱신됨)
+		if (!Room->bMatchStarted)
 		{
-			MemberCountText->SetText(FText::FromString(FString::Printf(TEXT("%d : %d"), Room->Members.Num(), Room->MaxMembers)));
-		}
+			if (MemberCountText)
+			{
+				MemberCountText->SetText(FText::FromString(FString::Printf(TEXT("%d : %d"), Room->Members.Num(), Room->MaxMembers)));
+			}
 
-		RefreshMemberList(Room->Members);
+			RefreshMemberList(Room->Members);
+		}
 
 		// 서버가 매치 서버를 띄우기 시작하면 true (실패하면 서버가 다시 false로 돌려서 패널도 꺼짐)
 		UpdateLoadingState(Room->bMatchStarted);

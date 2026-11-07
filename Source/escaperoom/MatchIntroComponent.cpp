@@ -265,7 +265,12 @@ void UMatchIntroComponent::RestoreMeshVisibility()
 		if (USkeletalMeshComponent* Mesh = State.Mesh.Get())
 		{
 			Mesh->SetOwnerNoSee(State.bOwnerNoSee);
-			Mesh->SetVisibility(State.bVisible, true);
+			// 인트로에서 숨긴 1인칭 팔 메시만 복구. 전신 메시까지 자식 전파로 복구하면
+			// 소켓에 붙은 SpotLight(러너 전용 조명)도 술래 화면에서 다시 켜짐
+			if (Mesh->bOnlyOwnerSee)
+			{
+				Mesh->SetVisibility(State.bVisible, true);
+			}
 		}
 	}
 	SavedMeshStates.Reset();
@@ -275,6 +280,12 @@ void UMatchIntroComponent::ShowIntroWidget(APlayerController* PC)
 {
 	if (!IntroWidgetClass || !PC)
 	{
+		return;
+	}
+
+	if (!PC->GetLocalPlayer())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Intro] %s: LocalPlayer 없음 - 인트로 위젯 생성 건너뜀"), *PC->GetName());
 		return;
 	}
 

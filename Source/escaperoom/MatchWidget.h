@@ -15,6 +15,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Engine/TimerHandle.h"
 #include "Containers/Queue.h"
+#include "EscapeRoomGameState.h" // EMatchNotifySound
 #include "MatchWidget.generated.h"
 
 class UImage;
@@ -25,6 +26,7 @@ class AEscapeRoomGameState;
 class UMatchPlayerEntryWidget;
 class UMaterialInstanceDynamic;
 class UWidgetAnimation;
+class USoundBase;
 
 UCLASS()
 class ESCAPEROOM_API UMatchWidget : public UUserWidget
@@ -93,6 +95,15 @@ protected:
 	// 등장 애니메이션이 끝난 뒤부터 역재생 시작까지 유지하는 시간
 	UPROPERTY(EditAnywhere, Category = "HUD|Notification")
 	float NotificationHoldSeconds = 2.f;
+
+	// 알림이 화면에 뜰 때마다 재생할 알림음. 2D로 재생해서 맵 어디에 있든 똑같이 들림.
+	// 각 클라이언트가 자기 화면에 알림을 띄우는 순간 로컬로 재생하므로 전원이 듣게 됨 (WBP에서 지정)
+	UPROPERTY(EditAnywhere, Category = "HUD|Notification")
+	TObjectPtr<USoundBase> NotificationSound;
+
+	// 감옥문이 열렸을 때 알림음 (이 알림만 공통 알림음 대신 재생). 비워두면 공통 알림음
+	UPROPERTY(EditAnywhere, Category = "HUD|Notification")
+	TObjectPtr<USoundBase> JailDoorOpenedSound;
 
 	// ---- 홀드 게이지 (러너/술래 공용 - 홀드 중일 때만 보임, 그 외엔 Collapsed) ----
 	UPROPERTY(meta = (BindWidgetOptional))
@@ -193,7 +204,7 @@ private:
 
 	// ---- 매치 알림 ----
 	// OnMatchNotification 콜백 - 절대 바로 표시하지 않고 항상 큐에 넣음. 표시 중이 아닐 때만 ShowNextNotification 호출
-	void HandleMatchNotification(const FText& Message);
+	void HandleMatchNotification(const FText& Message, EMatchNotifySound SoundType);
 
 	// 표시를 시작하는 유일한 지점. 큐에서 하나 꺼내 Visible + 정방향 재생, 큐가 비었으면 표시 종료 상태로
 	void ShowNextNotification();
@@ -205,7 +216,13 @@ private:
 	// 유지 시간이 끝나면 역재생 시작
 	void OnNotificationHoldFinished();
 
-	TQueue<FText> PendingNotifications;
+	// 알림 문장 + 알림음 종류
+	struct FPendingNotification
+	{
+		FText Message;
+		EMatchNotifySound SoundType = EMatchNotifySound::Common;
+	};
+	TQueue<FPendingNotification> PendingNotifications;
 
 	// 지금 알림 하나를 표시 중인지 (true면 새 알림은 큐에서 대기)
 	bool bIsShowingNotification = false;

@@ -6,6 +6,14 @@
 #include "DiceStageDataAsset.h"
 #include "EscapeRoomGameState.generated.h"
 
+// 알림이 뜰 때 MatchWidget이 재생할 알림음 종류 (실제 사운드 에셋은 WBP_Match에서 지정)
+UENUM(BlueprintType)
+enum class EMatchNotifySound : uint8
+{
+	Common,         // 공통 알림음 (NotificationSound)
+	JailDoorOpened, // 감옥문 열림 알림음 (JailDoorOpenedSound)
+};
+
 UCLASS()
 class ESCAPEROOM_API AEscapeRoomGameState : public AGameStateBase
 {
@@ -47,8 +55,12 @@ public:
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastMatchNotify(const FText& Message);
 
-	// MatchWidget이 구독 - 알림 문장을 받아서 큐에 넣고 순서대로 연출
-	DECLARE_MULTICAST_DELEGATE_OneParam(FOnMatchNotification, const FText& /*Message*/);
+	// 위와 같지만 알림음 종류를 지정 (예: 감옥문 열림 -> WBP_Match의 JailDoorOpenedSound)
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastMatchNotifyWithSound(const FText& Message, EMatchNotifySound SoundType);
+
+	// MatchWidget이 구독 - 알림 문장 + 알림음 종류를 받아서 큐에 넣고 순서대로 연출
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnMatchNotification, const FText& /*Message*/, EMatchNotifySound /*SoundType*/);
 	FOnMatchNotification OnMatchNotification;
 
 	FRoomInfo* FindRoom(int32 RoomId)
@@ -93,9 +105,7 @@ public:
 			OnDiceStageCleared.Broadcast(ExitsToSpawn);
 
 			// 알림: 탈출구 개방
-			MulticastMatchNotify(FText::Format(
-				NSLOCTEXT("MatchNotify", "ExitsOpened", "Exits opened: {0}!"),
-				FText::AsNumber(ExitsToSpawn)));
+			MulticastMatchNotify(NSLOCTEXT("MatchNotify", "ExitOpened", "Exit opened!"));
 			bStageCleared = true;
 		}
 

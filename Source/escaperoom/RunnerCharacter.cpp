@@ -59,6 +59,71 @@ void ARunnerCharacter::Tick(float DeltaSeconds)
     {
         SetActorRotation(InteractLockedRotation);
     }
+
+    UpdateClimbCamera();
+}
+
+void ARunnerCharacter::BeginClimbCamera()
+{
+    // 본인 클라(원격)에서만. 서버 자신이 조종하는 러너는 캡슐이 직접 올라가므로 오프셋 불필요
+    if (!IsLocallyControlled() || HasAuthority())
+    {
+        return;
+    }
+
+    UCameraComponent* Camera = GetFirstPersonCameraComponent();
+    if (!Camera)
+    {
+        return;
+    }
+
+    if (!bClimbCameraActive)
+    {
+        ClimbCameraBaseRelativeLocation = Camera->GetRelativeLocation();
+    }
+    bClimbCameraActive = true;
+    ClimbCameraStartZ = GetActorLocation().Z;
+    ClimbCameraTargetRise = 0.f;
+}
+
+void ARunnerCharacter::UpdateClimbCamera()
+{
+    if (!bClimbCameraActive)
+    {
+        return;
+    }
+
+    UCameraComponent* Camera = GetFirstPersonCameraComponent();
+    if (!Camera)
+    {
+        return;
+    }
+
+    // 올라가 있어야 할 높이 - 실제 캡슐 높이 = 카메라가 대신 올라가야 할 양 (보정이 오면 자동으로 줄어듦)
+    const float Offset = FMath::Max(0.f, ClimbCameraStartZ + ClimbCameraTargetRise - GetActorLocation().Z);
+
+    // 카메라는 스프링암 끝에 붙어 있으므로, 월드 위쪽 오프셋을 부모(소켓) 기준 상대값으로 변환해서 적용
+    FVector RelativeOffset(0.f, 0.f, Offset);
+    if (USceneComponent* Parent = Camera->GetAttachParent())
+    {
+        RelativeOffset = Parent->GetSocketTransform(Camera->GetAttachSocketName()).InverseTransformVectorNoScale(FVector(0.f, 0.f, Offset));
+    }
+    Camera->SetRelativeLocation(ClimbCameraBaseRelativeLocation + RelativeOffset);
+}
+
+void ARunnerCharacter::ResetClimbCamera()
+{
+    if (!bClimbCameraActive)
+    {
+        return;
+    }
+    bClimbCameraActive = false;
+    ClimbCameraTargetRise = 0.f;
+
+    if (UCameraComponent* Camera = GetFirstPersonCameraComponent())
+    {
+        Camera->SetRelativeLocation(ClimbCameraBaseRelativeLocation);
+    }
 }
 
 void ARunnerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -303,9 +368,12 @@ void ARunnerCharacter::OnClimbMontageEnded(UAnimMontage* Montage, bool bInterrup
     // 단, 탈출에 성공해서 몽타주가 끊긴 경우엔 OnRep_IsEscaped가 이미 이동을 꺼뒀으므로(MOVE_None) 건드리지 않음
     if (bIsEscaped)
     {
+        // 탈출 성공: 페이드/관전 전환 중이라 카메라를 내리지 않음 (내리면 페이드 도중 시점이 툭 떨어짐)
         bClimbFlightModeActive = false;
         return;
     }
+
+    ResetClimbCamera();
 
     if (bClimbFlightModeActive)
     {
@@ -632,6 +700,9 @@ void ARunnerCharacter::SetCaught(bool bNewCaught)
 
 void ARunnerCharacter::MulticastBeginChoked_Implementation(FVector TargetLocation, FRotator TargetRotation)
 {
+    // 사다리 오르던 중 잡힌 경우 본인 화면 카메라 오프셋 해제
+    ResetClimbCamera();
+
     // 사다리와 달리 여기서는 위치를 완전히 스냅시켜도 문제없음(쌓아올린 상태 같은 게 없음) -
     // 술래의 ChokeGrabPoint 자리로 정확히 옮겨야 두 몽타주가 애니메이터 의도대로 맞물림
     SetActorLocationAndRotation(TargetLocation, TargetRotation);
@@ -784,8 +855,40 @@ void ARunnerCharacter::MulticastBeginLadderClimb_Implementation(FVector TargetLo
     // 다시 재생되는 경우가 생겨서, 아예 재생 자체를 시도하지 않는다
 }
 
-void ARunnerCharacter::MulticastBeginLadderHold_Implementation()
+void ARunnerCharacter::MulticastBeginLadderHold_Implementation(FVector StartLocation, FRotator StartRotation)
 {
+    // [사다리 시작 위치 스냅] 홀드 시작 순간 한 번 ClimbStartPoint로 옮김 (서버 + 모든 클라 동시에).
+    // 예전 BeginLadderClimb의 스냅은 홀드 "끝"에 해서 쌓인 높이를 지워버렸지만, 여기는 홀드 "시작"이라
+    // 아직 쌓인 높이가 없으므로 문제 없음. 높이(Z)는 현재 값 유지, 회전은 Yaw만
+    {
+        const FVector SnapLocation(StartLocation.X, StartLocation.Y, GetActorLocation().Z);
+        const FRotator SnapRotation(0.f, StartRotation.Yaw, 0.f);
+
+        if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+        {
+            MoveComp->StopMovementImmediately();
+        }
+        SetActorLocationAndRotation(SnapLocation, SnapRotation, false, nullptr, ETeleportType::TeleportPhysics);
+
+        // 상호작용 중 Tick이 이 값으로 회전을 고정하므로 같이 갱신 (안 하면 홀드 시작 때 방향으로 되돌아감)
+        InteractLockedRotation = SnapRotation;
+
+        // 1인칭이라 몸 Yaw가 컨트롤 회전을 따라감 -> 컨트롤러가 있는 머신(서버 + 본인 클라)은 컨트롤 회전도 맞춤
+        if (Controller)
+        {
+            Controller->SetControlRotation(SnapRotation);
+        }
+
+        // CMC가 이 위치 변화를 "어긋남"으로 보고 되돌리지 않도록 (NotifyClimbStep과 같은 이유)
+        if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+        {
+            MoveComp->bJustTeleported = true;
+        }
+    }
+
+    // 본인 화면 카메라 오프셋 시작 (스냅 이후 높이를 기준으로)
+    BeginClimbCamera();
+
     // AExitActor::OnInteractHoldUpdateInternal이 홀드 시작(bHolding=true)을 서버에서 승인한 뒤 호출.
     // Multicast라 서버 자신 + 모든 클라이언트에서 동시에 재생됨 - 서버 자신도 이 몽타주를 재생하고
     // 있어야, 그 안의 AnimNotify(NotifyClimbStep)가 서버의 권위있는 위치를 직접 움직이게 되어
@@ -823,6 +926,8 @@ void ARunnerCharacter::MulticastBeginLadderHold_Implementation()
 
 void ARunnerCharacter::MulticastCancelLadderHold_Implementation()
 {
+    ResetClimbCamera();
+
     // AExitActor::OnInteractHoldUpdateInternal이 홀드 취소(bHolding=false)를 서버에서 처리한 뒤 호출.
     // MulticastBeginLadderHold로 모든 클라이언트에서 시작시켰던 걸 다시 모든 클라이언트에서 원상복구함
     if (ClimbMontage && GetMesh())
@@ -845,10 +950,27 @@ void ARunnerCharacter::MulticastCancelLadderHold_Implementation()
 
 void ARunnerCharacter::NotifyClimbStep(float HeightDelta)
 {
-    // Multicast로 모든 머신에서 동일하게 재생되는 몽타주에 심긴 Notify가 각자 로컬에서 이걸 부르므로,
-    // 서버/모든 클라이언트가 각자 독립적으로 같은 만큼 이동시켜 결과적으로 다 같이 맞게 보인다
-    // (DiceActor 흔들림 등 기존 순수 비주얼 연출과 동일한 방식 - HasAuthority 체크 불필요)
+    // 본인 클라: 캡슐은 건드리지 않고 카메라가 올라가야 할 높이만 누적 (Tick의 UpdateClimbCamera가 적용)
+    if (bClimbCameraActive)
+    {
+        ClimbCameraTargetRise += HeightDelta;
+    }
+
+    // [서버 전용] 예전엔 서버와 각 클라가 각자 노티파이 타이밍에 따로 캡슐을 올려서, 타이밍이 어긋날 때마다
+    // CMC 위치 보정이 끼어들어 본인 클라의 캡슐(=카메라)이 되돌아가거나 서버보다 낮게 끝나는 문제가 있었음
+    // ([ClimbDiag] 로그: 서버는 +30씩 정상, 클라는 같은 Z가 두 번씩 찍힘). 이제 위치는 서버만 바꾸고,
+    // 본인 클라는 CMC 보정, 다른 클라는 이동 복제로 서버 위치를 따라감 (몽타주 재생 자체는 모든 머신에서 그대로)
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    // 서버의 권위있는 위치만 올림 -> 클라들은 이 위치를 따라감
     AddActorWorldOffset(FVector(0.f, 0.f, HeightDelta), false);
+
+    // [ClimbDiag] 캐릭터별로 스텝 노티파이가 몇 번/얼마만큼 불리는지 (서버/클라 각각) - 확인 후 삭제
+    UE_LOG(LogTemp, Warning, TEXT("[ClimbDiag] %s NetMode=%d Step=%.1f Z=%.1f Montage=%s"),
+        *GetName(), (int32)GetNetMode(), HeightDelta, GetActorLocation().Z, *GetNameSafe(ClimbMontage));
 
     // CharacterMovementComponent는 자기 이동 파이프라인을 거치지 않은 위치 변화를 다음 틱에
     // "어긋났다"고 판단해서 원래 위치로 되돌려버린다 (ACharacter::TeleportTo가 내부적으로

@@ -27,6 +27,21 @@ namespace LobbyInputFilter
 		return Out;
 	}
 
+	// 영문 대소문자(A-Z, a-z) + 숫자(0-9) + 공백만 남김 (닉네임 입력용)
+	inline FString KeepEnglishAndDigits(const FString& In)
+	{
+		FString Out;
+		Out.Reserve(In.Len());
+		for (const TCHAR C : In)
+		{
+			if ((C >= TEXT('A') && C <= TEXT('Z')) || (C >= TEXT('a') && C <= TEXT('z')) || (C >= TEXT('0') && C <= TEXT('9')) || C == TEXT(' '))
+			{
+				Out.AppendChar(C);
+			}
+		}
+		return Out;
+	}
+
 	// 숫자(0-9)만 남김 (최대 인원 입력용)
 	inline FString KeepDigitsOnly(const FString& In)
 	{

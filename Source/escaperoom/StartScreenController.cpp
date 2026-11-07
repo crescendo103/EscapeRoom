@@ -417,6 +417,21 @@ void AStartScreenController::Debug_SetReady(bool bReady)
 	Server_SetReady(bReady);
 }
 
+void AStartScreenController::Debug_ShowEnding(int32 RoomType)
+{
+	UEscapeRoomSessionSubsystem* Session = GetGameInstance() ? GetGameInstance()->GetSubsystem<UEscapeRoomSessionSubsystem>() : nullptr;
+	if (!Session)
+	{
+		return;
+	}
+
+	// 매치가 끝난 것처럼 서브시스템에 결과를 넣고, 로비 엔딩을 그대로 재생
+	const EMatchResultRoomType Type = static_cast<EMatchResultRoomType>(FMath::Clamp(RoomType, 0, 3));
+	const bool bChaser = (Type == EMatchResultRoomType::ChaserWin || Type == EMatchResultRoomType::ChaserLose);
+	Session->SetPendingMatchResult(Type, bChaser ? FText::FromString(TEXT("Escaped 2 : Caught 3")) : FText::GetEmpty());
+	ShowPendingMatchResult();
+}
+
 void AStartScreenController::Client_PlayAllReadySound_Implementation()
 {
 	if (AllReadySound)

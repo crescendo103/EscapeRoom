@@ -4,6 +4,7 @@
 #include "escaperoomProjectile.h"
 #include "Animation/AnimInstance.h"
 #include "Camera/CameraComponent.h"
+#include "GameFramework/SpringArmComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "EnhancedInputComponent.h"
@@ -30,9 +31,18 @@ AescaperoomCharacter::AescaperoomCharacter()
 	GetCapsuleComponent()->InitCapsuleSize(55.f, 96.0f);
 		
 	// Create a CameraComponent	
+	// 벽에 닿으면 카메라를 앞으로 밀어주는 스프링암 (몸 뒤에 고정, 몸과 같이 회전)
+	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
+	CameraBoom->SetupAttachment(GetCapsuleComponent());
+	CameraBoom->SetRelativeLocation(FVector(0.f, 10.f, 80.f)); // 카메라 구도는 여기서만 관리 (술래/러너 공통)
+	CameraBoom->TargetArmLength = 140.f;
+	CameraBoom->bUsePawnControlRotation = false;
+	CameraBoom->bDoCollisionTest = true;
+	CameraBoom->ProbeChannel = ECC_Camera;
+
 	FirstPersonCameraComponent = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
-	FirstPersonCameraComponent->SetupAttachment(GetCapsuleComponent());
-	FirstPersonCameraComponent->SetRelativeLocation(FVector(-10.f, 0.f, 60.f)); // Position the camera
+	FirstPersonCameraComponent->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+	FirstPersonCameraComponent->SetRelativeLocation(FVector::ZeroVector); // 스프링암 끝에 그대로 붙임
 	FirstPersonCameraComponent->bUsePawnControlRotation = true;
 
 	// Create a mesh component that will be used when being viewed from a '1st person' view (when controlling this pawn)
@@ -53,6 +63,12 @@ AescaperoomCharacter::AescaperoomCharacter()
 
 void AescaperoomCharacter::BeginPlay()
 {
+	// 자식 BP에 예전 카메라 위치가 저장돼 있어도 무시 -> 구도는 생성자의 CameraBoom 값 하나로 통일
+	if (FirstPersonCameraComponent)
+	{
+		FirstPersonCameraComponent->SetRelativeLocation(FVector::ZeroVector);
+	}
+
 	// Call the base class  
 	Super::BeginPlay();
 }

@@ -14,6 +14,8 @@
 #include "ChaserCharacter.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Animation/WidgetAnimation.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 
 void UMatchWidget::NativeConstruct()
 {
@@ -300,9 +302,9 @@ void UMatchWidget::HandleActiveExitCountChanged(int32 Count)
 
 // =========================== 매치 알림 ===========================
 
-void UMatchWidget::HandleMatchNotification(const FText& Message)
+void UMatchWidget::HandleMatchNotification(const FText& Message, EMatchNotifySound SoundType)
 {
-	PendingNotifications.Enqueue(Message);
+	PendingNotifications.Enqueue(FPendingNotification{ Message, SoundType });
 
 	// 표시 중이면 큐에서 기다렸다가, 지금 알림의 역재생이 끝날 때 ShowNextNotification이 꺼내감
 	if (!bIsShowingNotification)
@@ -313,8 +315,8 @@ void UMatchWidget::HandleMatchNotification(const FText& Message)
 
 void UMatchWidget::ShowNextNotification()
 {
-	FText Next;
-	if (!NotificationText || !PendingNotifications.Dequeue(Next))
+	FPendingNotification NextNotify;
+	if (!NotificationText || !PendingNotifications.Dequeue(NextNotify))
 	{
 		// 큐가 비었음(또는 WBP에 텍스트가 없음) - 다음 알림이 오면 바로 표시되도록 대기 상태로
 		bIsShowingNotification = false;
@@ -324,7 +326,19 @@ void UMatchWidget::ShowNextNotification()
 	bIsShowingNotification = true;
 	bIsNotificationReversing = false;
 
-	NotificationText->SetText(Next);
+	NotificationText->SetText(NextNotify.Message);
+
+	// 알림음 - 큐에서 꺼내 실제로 보여주는 이 순간에 재생해서 화면 표시와 소리가 항상 맞음.
+	// 감옥문 열림이면 JailDoorOpenedSound(비어있으면 공통), 나머지는 공통 알림음. 2D라 맵 어디서든 들림
+	USoundBase* SoundToPlay = NotificationSound.Get();
+	if (NextNotify.SoundType == EMatchNotifySound::JailDoorOpened && JailDoorOpenedSound)
+	{
+		SoundToPlay = JailDoorOpenedSound.Get();
+	}
+	if (SoundToPlay)
+	{
+		UGameplayStatics::PlaySound2D(this, SoundToPlay);
+	}
 	// 패널이 있으면 패널을 켬 (텍스트는 WBP 기본값 그대로 두면 부모를 따라 보임).
 	// HitTestInvisible = 보이기만 하고 클릭은 막지 않음
 	if (NotificationPanel)

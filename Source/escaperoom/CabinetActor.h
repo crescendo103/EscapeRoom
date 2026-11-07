@@ -6,6 +6,8 @@
 #include "TimerManager.h"
 #include "CabinetActor.generated.h"
 
+class AChaserCharacter;
+
 class UStaticMeshComponent;
 class USpringArmComponent;
 class UCameraComponent;
@@ -185,6 +187,11 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Cabinet|Input")
     TObjectPtr<UInputMappingContext> CabinetMappingContext;
 
+    // IMC_Cabinet 우선순위. 러너 IMC(1)/공통 IMC(0)가 캐비넷 안에서도 남아있어서, 같은 우선순위(1)면
+    // E키/마우스를 러너 쪽 액션이 먼저 소비해 나가기/훔쳐보기가 안 먹힘 -> 그보다 높게, 관전 IMC(10)보다는 낮게
+    UPROPERTY(EditDefaultsOnly, Category = "Cabinet|Input")
+    int32 CabinetMappingPriority = 5;
+
     // 훔쳐보기 Look (Axis2D)
     UPROPERTY(EditDefaultsOnly, Category = "Cabinet|Input")
     TObjectPtr<UInputAction> CabinetLookAction;
@@ -303,6 +310,14 @@ protected:
     // bRestoreOriginalPosition=true면 도망자를 숨기 직전 위치로 복귀시킴 (자발적으로 나갈 때만 사용,
     // 술래에게 잡혔을 때는 일단 기본값 false로 캐비넷 위치에 그대로 둠 - 나중에 다시 검토)
     void ReturnControlToRunner(bool bRestoreOriginalPosition = false);
+
+    // 숨은 러너 발각 후, 술래 CabinetOpen 몽타주를 즉시 끊고 한 프레임 뒤에 목조르기를 시작함.
+    // 그 한 프레임 동안 손 소켓(GrabSocket)이 기본 자세로 돌아와서 일반 Grab과 같은 위치에 러너가 붙음
+    void ExecutePendingCatch();
+
+    // 발각 ~ 다음 프레임 목조르기 시작 사이 (이 동안 러너 나가기 / 술래 재열기 차단)
+    bool bCatchPending = false;
+    TWeakObjectPtr<AChaserCharacter> PendingCatchChaser;
 
     // bIsHoldPreview를 갱신하고, 서버 자신의 화면에도 즉시 반영 (OnRep 수동 호출 패턴)
     void SetHoldPreview(bool bNewHoldPreview);

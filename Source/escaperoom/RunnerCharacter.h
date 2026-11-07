@@ -191,6 +191,18 @@ protected:
     // 홀드가 취소되면(사다리를 실제로 타지 않게 되면) 다시 Walking으로 복구해야 하므로 플래그로 추적
     bool bClimbFlightModeActive = false;
 
+    // [본인 화면 전용] 사다리 카메라 오프셋. 캡슐 상승은 서버만 하고(NotifyClimbStep) 본인 클라는 보정이
+    // 늦거나 안 와서 카메라가 바닥에 남는 문제가 있음 → 본인 클라에서만 노티파이로 올라가야 할 높이를 누적해
+    // 카메라만 로컬로 올림. 보정으로 캡슐이 따라 올라오면 그만큼 오프셋이 자동으로 줄어듦 (이중 상승 없음)
+    bool bClimbCameraActive = false;
+    float ClimbCameraStartZ = 0.f;
+    float ClimbCameraTargetRise = 0.f;
+    FVector ClimbCameraBaseRelativeLocation = FVector::ZeroVector;
+
+    void BeginClimbCamera();
+    void UpdateClimbCamera();
+    void ResetClimbCamera();
+
     void EndInteractPulse();
     void OnInteractMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 
@@ -353,8 +365,10 @@ public:
     // 만드는 위치 변화를 서버가 전혀 모르게 되고, CharacterMovementComponent의 클라-서버 교차검증에서
     // "서버 기준 위치"로 계속 되돌려버리는 문제가 있었음. Multicast로 서버 자신도 같이 재생하게 하면
     // 서버의 권위있는 위치 자체가 같이 올라가므로 더 이상 되돌아가지 않음
+    // StartLocation/StartRotation: 탈출구의 ClimbStartPoint. 홀드 시작 순간 한 번 이 위치(X/Y, 높이는 현재 Z 유지)와
+    // 방향(Yaw)으로 스냅한 뒤 몽타주를 재생함 - 캐릭터/몽타주마다 루트모션이 달라도 항상 사다리 앞에서 시작하도록
     UFUNCTION(NetMulticast, Reliable, Category = "Exit")
-    void MulticastBeginLadderHold();
+    void MulticastBeginLadderHold(FVector StartLocation, FRotator StartRotation);
 
     // 위 MulticastBeginLadderHold의 취소판. OnInteractHoldUpdateInternal이 bHolding=false를 받으면 호출 -
     // 모든 클라이언트에서 몽타주를 멈추고 Flying으로 바꿔뒀던 걸 다시 Walking으로 복구한다

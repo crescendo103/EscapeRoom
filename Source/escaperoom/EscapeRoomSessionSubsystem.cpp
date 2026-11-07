@@ -228,6 +228,20 @@ void UEscapeRoomSessionSubsystem::LoginEOS(FOnEOSLoginFinished OnFinished)
 		return;
 	}
 
+	// [로컬 테스트] 같은 PC의 클라들은 Device ID가 같아 PUID도 같음 -> 자기 자신에게 P2P 접속이 안 됨.
+	// DefaultGame.ini [EscapeRoom.Network] bUseEOS=False면 로그인을 건너뛰어 로비가 IP 방식으로 매치를 연결
+	bool bUseEOS = true;
+	if (GConfig)
+	{
+		GConfig->GetBool(TEXT("EscapeRoom.Network"), TEXT("bUseEOS"), bUseEOS, GGameIni);
+	}
+	if (!bUseEOS)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[EOS] bUseEOS=False - skipping EOS login (IP match)"));
+		OnFinished.ExecuteIfBound(false);
+		return;
+	}
+
 	PendingEOSLoginCallbacks.Add(MoveTemp(OnFinished));
 	if (bEOSLoginInProgress)
 	{

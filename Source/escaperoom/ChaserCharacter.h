@@ -15,6 +15,8 @@ class UMeshComponent;
 class AWFCGridManager;
 class ARunnerCharacter;
 class UAudioComponent;
+class UCameraComponent;
+class UTimelineComponent;
 
 /**
  * 술래 캐릭터.
@@ -49,6 +51,10 @@ class ESCAPEROOM_API AChaserCharacter : public AescaperoomCharacter
 
 public:
     AChaserCharacter();
+
+    // 부감 카메라 블렌드: 기존 카메라와 OverheadCamera의 시점을 전환 진행도만큼 섞어서 화면에 씀.
+    // 같은 액터의 카메라끼리는 SetViewTargetWithBlend가 안 먹어서 여기서 직접 계산함
+    virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
 
     // 부감 스킬 활성화 여부 (서버 권위 + 전체 클라이언트 복제).
     // AnimBP가 이 값을 참고해서 목 늘어나는 애니메이션으로 전환함 (술래 본인 포함 모든 클라에서 동일하게 재생됨)
@@ -236,6 +242,32 @@ protected:
     // 맵 전체 천장을 투명화한다. 실제 스켈레톤 본 이름에 맞춰야 함 (현재 기준 "neck")
     UPROPERTY(EditDefaultsOnly, Category = "OverheadView")
     FName NeckBoneName = TEXT("neck");
+
+    // ---- 부감 카메라 (머리 소켓에 붙어서 목과 함께 올라가는 1인칭 카메라) ----
+    // 꺼둔 상태(bAutoActivate=false)로 유지하고 시점 계산에만 씀. 켜져 있으면 엔진이 기본 카메라로 잡을 수 있음.
+    // 소켓 회전을 따라감(bUsePawnControlRotation=false) -> 머리 애니메이션대로 화면이 움직임.
+    // 위아래 시점은 CalcCamera에서 컨트롤러 Pitch를 더해 줌 (좌우는 몸이 컨트롤러 Yaw를 따라 돌아서 자동으로 됨)
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "OverheadView")
+    TObjectPtr<UCameraComponent> OverheadCamera;
+
+    // OverheadCamera를 붙일 메시 소켓 이름
+    UPROPERTY(EditDefaultsOnly, Category = "OverheadView")
+    FName OverheadCameraSocketName = TEXT("HeadSocket");
+
+    // 카메라 전환 시간(초). 목이 늘어나기 시작하면 이 시간 동안 머리 카메라로 넘어가고,
+    // 목이 줄어들 때는 같은 전환을 역재생해서 목이 다 내려오는 순간에 끝남. 0이면 즉시 전환
+    UPROPERTY(EditDefaultsOnly, Category = "OverheadView", meta = (ClampMin = "0.0"))
+    float OverheadCameraBlendTime = 0.6f;
+
+    // 목 늘이기 타임라인 이름 (BP_ChaserCharacter의 Timeline). 카메라 전환 시점의 기준이 됨
+    UPROPERTY(EditDefaultsOnly, Category = "OverheadView")
+    FName NeckTimelineName = TEXT("necklong");
+
+    UPROPERTY(Transient)
+    TObjectPtr<UTimelineComponent> NeckTimeline;
+
+    // 0 = 기존 카메라, 1 = 머리 카메라
+    float GetOverheadCameraAlpha() const;
 
     // 지금 맵 전체 천장이 페이드(투명) 상태인지. Tick에서 매 프레임 SetScalarParameterValue를
     // 다시 호출하지 않도록, 상태가 실제로 바뀔 때만 반영하기 위한 캐시용 플래그
@@ -487,9 +519,10 @@ public:
     UFUNCTION(NetMulticast, Reliable)
     void MulticastBeginCabinetOpen();
 
-    // 열기 홀드 취소 또는 완료: CabinetOpenMontage를 블렌드아웃으로 정지
+    // 열기 홀드 취소 또는 완료: CabinetOpenMontage를 블렌드아웃으로 정지.
+    // bInstant=true면 블렌드 없이 즉시 끊음 - 러너 발각 시, 손(GrabSocket)이 여는 자세에 남지 않게 하기 위함
     UFUNCTION(NetMulticast, Reliable)
-    void MulticastStopCabinetOpen();
+    void MulticastStopCabinetOpen(bool bInstant = false);
 
     // 끝까지 열었는데 비어있음(허탕): CabinetEmptyMontage 재생 (재생 중 이동/시점 회전 잠금)
     UFUNCTION(NetMulticast, Reliable)

@@ -77,7 +77,12 @@ void AEscapeRoomGameState::MulticastMatchNotify_Implementation(const FText& Mess
 {
 	// 여기는 이미 각 머신(서버/클라 각각)에서 실행 중 - 이 머신의 위젯에만 로컬로 전달.
 	// 데디서버에는 구독한 위젯이 없으니 아무 일도 일어나지 않음
-	OnMatchNotification.Broadcast(Message);
+	OnMatchNotification.Broadcast(Message, EMatchNotifySound::Common);
+}
+
+void AEscapeRoomGameState::MulticastMatchNotifyWithSound_Implementation(const FText& Message, EMatchNotifySound SoundType)
+{
+	OnMatchNotification.Broadcast(Message, SoundType);
 }
 
 void AEscapeRoomGameState::OnRep_ActiveExitCount()

@@ -127,8 +127,17 @@ protected:
 
 	// 지금 이 탈출구를 홀드 중인 러너 (없으면 nullptr). 서버가 홀드 시작/취소/완료 시점에 세팅하고 복제됨.
 	// 오르던 러너가 잡히거나(IsCaught/IsBeingCaught) 사라지면 IsOccupied()가 자동으로 무시함
-	UPROPERTY(Replicated)
+	UPROPERTY(ReplicatedUsing = OnRep_CurrentClimber)
 	TObjectPtr<APawn> CurrentClimber;
+
+	// 오르기 시작 -> 사다리 시퀀스를 확실히 내림 / 오르기 끝(취소) -> 범위 안에 러너가 없을 때만 닫음.
+	// 홀드 시작 시 ClimbStartPoint로 스냅되면서 범위(SequenceTriggerRange) 밖으로 나가 EndOverlap이 와도
+	// 사다리가 올라가버리지 않게 하기 위함. 서버는 값을 바꾼 뒤 직접 호출(리슨 배려), 클라는 복제로 호출
+	UFUNCTION()
+	void OnRep_CurrentClimber();
+
+	// SequenceTriggerRange 안에 술래가 아닌 폰이 하나라도 있는지 (사다리를 닫아도 되는지 판단용)
+	bool IsAnyRunnerInSequenceRange() const;
 
 	// 서버에서 GameState::ActiveExitCount에 +1 했는지 (EndPlay에서 짝 맞춰 -1 하기 위함)
 	bool bCountedAsActiveExit = false;
