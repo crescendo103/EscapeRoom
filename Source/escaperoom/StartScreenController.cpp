@@ -68,6 +68,14 @@ void AStartScreenController::InitLocalLobby()
 			{
 				Session->bTriedAutoConnect = true;
 
+				// EOS 로그인 + 로비 서버 접속이 끝날 때까지(수 초~최대 15초) 위젯/입력 모드가 아직 없어서
+				// 로컬 GameMode가 스폰한 기본 폰이 마우스/WASD로 날아다님 → 이동/회전 입력 잠금.
+				// 서버 로비에 도착하면 새 컨트롤러가 생기고 시작 화면이 입력 모드를 다시 잡으므로 해제 불필요
+				SetIgnoreMoveInput(true);
+				SetIgnoreLookInput(true);
+				SetInputMode(FInputModeUIOnly());
+				bShowMouseCursor = false;
+
 				// [EOS] 로비에 들어가기 전에 EOS 로그인부터 (술래가 됐을 때 러너들이 P2P로 접속할 내 주소를 만들기 위함).
 				// 성공/실패와 상관없이 끝나면 로비로 접속 - 실패하면 로비가 기존 IP 방식으로 매치를 연결함
 				UE_LOG(LogTemp, Log, TEXT("[Session] EOS login before connecting to lobby server: %s"), *LobbyAddress);

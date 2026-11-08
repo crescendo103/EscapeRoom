@@ -344,6 +344,15 @@ protected:
     // 목조르기 중 이동 모드를 MOVE_None으로 바꿔뒀는지 (MulticastStopBeingChoked에서 Walking 복구용)
     bool bChokeMovementDisabled = false;
 
+    // [리슨 서버] 목조르기 연출 동안 서버가 원격 러너의 애니메이션/메시를 직접 맡기 위한 상태.
+    // 서버는 원격 클라이언트 캐릭터의 포즈를 그 클라가 보낸 이동 패킷(ServerMove)이 올 때만 진행하는데
+    // (bOnlyAllowAutonomousTickPose), 연출 중엔 MOVE_None이라 패킷이 띄엄띄엄 와서 술래(호스트) 화면에서
+    // 몽타주가 멈췄다 튀었다 하고 기본 자세와 섞여 보임. 또 리슨 서버 메시 스무딩이 스냅/들어올리기
+    // (SetActorLocation)를 따라가며 메시를 출렁이게 함 → 연출 동안만 둘 다 끄고 Stop에서 원래대로 복구
+    bool bChokeServerAnimOverride = false;
+    bool bSavedOnlyAllowAutonomousTickPose = false;
+    ENetworkSmoothingMode SavedNetworkSmoothingMode = ENetworkSmoothingMode::Exponential;
+
     // Capture()가 서버에서 호출(성공/실패 양쪽): BeingChokedMontage를 Stop시켜 마지막 프레임 포즈를 풀고,
     // 들어올리기/이동 모드/bIsBeingCaught를 원래대로 복구. Montage/이동모드/bIsBeingCaught 모두 각 머신의
     // 로컬 상태라 Multicast로 본인 포함 모든 클라에서 실행해야 함

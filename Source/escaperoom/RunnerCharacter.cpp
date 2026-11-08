@@ -722,6 +722,29 @@ void ARunnerCharacter::MulticastBeginChoked_Implementation(FVector TargetLocatio
         bChokeMovementDisabled = true;
     }
 
+    // [리슨 서버 전용] 원격 클라이언트가 조종하는 러너는 서버에서 이동 패킷이 올 때만 포즈가 진행됨 →
+    // 연출 동안은 서버가 매 프레임 직접 몽타주를 진행(노티파이/들어올리기 포함)하고, 메시 스무딩도 꺼서
+    // 스냅/들어올리기 위치가 그대로 보이게 함. 로컬 조종 캐릭터(호스트 본인)나 클라이언트에서는 해당 없음
+    if (HasAuthority() && !IsLocallyControlled() && !bChokeServerAnimOverride)
+    {
+        if (USkeletalMeshComponent* MeshComp = GetMesh())
+        {
+            bSavedOnlyAllowAutonomousTickPose = MeshComp->bOnlyAllowAutonomousTickPose;
+            MeshComp->bOnlyAllowAutonomousTickPose = false;
+        }
+        if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+        {
+            SavedNetworkSmoothingMode = MoveComp->NetworkSmoothingMode;
+            MoveComp->NetworkSmoothingMode = ENetworkSmoothingMode::Disabled;
+        }
+        // 스무딩이 남겨둔 메시 오프셋 제거 → 메시를 캡슐 기준 기본 위치로
+        if (USkeletalMeshComponent* MeshComp = GetMesh())
+        {
+            MeshComp->SetRelativeLocationAndRotation(GetBaseTranslationOffset(), GetBaseRotationOffset());
+        }
+        bChokeServerAnimOverride = true;
+    }
+
     if (BeingChokedMontage && GetMesh())
     {
         if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
@@ -827,6 +850,21 @@ void ARunnerCharacter::MulticastStopBeingChoked_Implementation()
             // 몽타주에 설정된 블렌드아웃 시간으로 로코모션에 되돌아가게 함
             AnimInstance->Montage_Stop(BeingChokedMontage->BlendOut.GetBlendTime(), BeingChokedMontage);
         }
+    }
+
+    // [리슨 서버] MulticastBeginChoked에서 꺼둔 이동 패킷 기반 포즈 틱 / 메시 스무딩 복구.
+    // 몽타주 블렌드아웃은 서버가 직접 진행해도 문제없고, 이후 일반 이동 동기화는 원래 방식으로 돌아감
+    if (bChokeServerAnimOverride)
+    {
+        if (USkeletalMeshComponent* MeshComp = GetMesh())
+        {
+            MeshComp->bOnlyAllowAutonomousTickPose = bSavedOnlyAllowAutonomousTickPose;
+        }
+        if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+        {
+            MoveComp->NetworkSmoothingMode = SavedNetworkSmoothingMode;
+        }
+        bChokeServerAnimOverride = false;
     }
 }
 
