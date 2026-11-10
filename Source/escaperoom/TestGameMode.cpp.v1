@@ -1,0 +1,29 @@
+// TestGameMode.cpp
+#include "TestGameMode.h"
+#include "GameFramework/PlayerController.h"
+
+void ATestGameMode::EnsureStartPointsReady()
+{
+	if (bStartPointsReady)
+	{
+		return;
+	}
+
+	CollectStartPoints();     // WFCGridManager가 없으면 경고 로그만 남기고 빈 목록
+	bStartPointsReady = true; // 이후 PlayerCanRestart(부모)도 통과 → 리스폰/관전 복귀 등 기본 흐름 사용 가능
+	UE_LOG(LogTemp, Log, TEXT("[TestGameMode] WFC 맵 생성 없이 바로 스폰 (레벨 PlayerStart 사용)"));
+}
+
+void ATestGameMode::HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer)
+{
+	if (!NewPlayer)
+	{
+		return;
+	}
+
+	EnsureStartPointsReady();
+
+	// 역할 판정(GetDefaultPawnClassForController)은 부모 그대로:
+	// 리슨 서버면 호스트 = 술래, 나머지 = 러너 (러너 BP도 접속 순서대로 배정)
+	SpawnPlayerAtStartPoint(NewPlayer);
+}

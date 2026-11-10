@@ -1,0 +1,24 @@
+// TestGameMode.h
+// 테스트맵 전용 게임모드: escaperoomGameMode의 매치 로직(술래/러너 배정, 목조르기, 감옥 등)은 그대로 쓰고,
+// WFC 맵 생성을 기다리지 않고 접속 즉시 레벨의 PlayerStart에 스폰한다.
+// (레벨에 WFCGridManager를 두지 않으면 맵 생성 자체가 일어나지 않음)
+#pragma once
+
+#include "CoreMinimal.h"
+#include "escaperoomGameMode.h"
+#include "TestGameMode.generated.h"
+
+UCLASS()
+class ATestGameMode : public AescaperoomGameMode
+{
+	GENERATED_BODY()
+
+protected:
+	// 부모는 맵 생성 완료(OnMatchClockStarted)까지 대기열에만 넣는데, 여기선 바로 스폰
+	virtual void HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer) override;
+
+private:
+	// 시작지점 준비(=부모의 bStartPointsReady)를 접속 시점에 바로 끝냄.
+	// WFCGridManager가 없으면 빅룸 시작지점이 0개라 SpawnPlayerAtStartPoint가 레벨 PlayerStart로 대체 스폰함
+	void EnsureStartPointsReady();
+};

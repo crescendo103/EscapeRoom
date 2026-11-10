@@ -118,23 +118,6 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerSpectateNext();
 
-	// ===== [DEBUG KEYS] 시작 =====
-	// 디버그 키 제거 시: 이 블록 + DungeonPlayerController.cpp의 [DEBUG KEYS] 블록 3곳(include, Tick 안, 함수 정의)
-	// + DiceActor.h의 [DEBUG KEYS] 블록만 지우면 됨.
-	// 8번: 조종 중인 캐릭터(러너/술래)를 아직 안 먹은 주사위 근처로 이동 (누를 때마다 다음 주사위로 순환)
-	// 9번: 조종 중인 캐릭터(러너/술래)를 가장 가까운 탈출구(열린 것 우선) 바로 아래 바닥으로 이동 (탈출구가 천장에 있음)
-	// UFUNCTION은 #if로 감쌀 수 없어서(UHT 제약) 선언은 항상 있고, 구현 본문만 출시(Shipping) 빌드에서 비활성화됨
-	UFUNCTION(Server, Reliable)
-	void ServerDebugTeleport(uint8 TargetType); // 0 = 주사위, 1 = 탈출구
-
-private:
-	// 8번을 누를 때마다 다음 주사위로 넘어가기 위한 순번 (서버 전용)
-	int32 DebugDiceIndex = 0;
-
-	void HandleDebugKeys();
-public:
-	// ===== [DEBUG KEYS] 끝 =====
-
 	// ===================== 배경음악 =====================
 	//
 	// 로딩이 끝나면 로컬에서 2D로 재생. 술래 공포 반경 안에 들어가면 일시정지(아우라 BGM만 들리게),
